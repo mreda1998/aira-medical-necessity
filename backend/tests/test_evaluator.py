@@ -80,3 +80,43 @@ def test_pivotal_leaf_detection():
     ids = pivotal_leaf_ids(node, facts(fact("a", True)))
     assert "b" in ids
     assert "a" not in ids
+
+
+def test_pivotal_flags_all_jointly_missing_leaves():
+    # all_of with two missing leaves: BOTH must be flagged (this was the bug)
+    node = AllOf(id="r", children=[
+        leaf("a", PredicateType.BOOLEAN, "a", True),
+        leaf("b", PredicateType.BOOLEAN, "b", True),
+        leaf("c", PredicateType.BOOLEAN, "c", True),
+    ])
+    ids = pivotal_leaf_ids(node, facts(fact("a", True)))
+    assert set(ids) == {"b", "c"}
+
+
+def test_pivotal_n_of_shortfall_two():
+    node = NOf(id="r", k=2, children=[
+        leaf("a", PredicateType.BOOLEAN, "a", True),
+        leaf("b", PredicateType.BOOLEAN, "b", True),
+        leaf("c", PredicateType.BOOLEAN, "c", True),
+    ])
+    ids = pivotal_leaf_ids(node, facts(fact("a", True)))
+    assert set(ids) == {"b", "c"}
+
+
+def test_pivotal_ignores_missing_leaf_when_verdict_already_conclusive():
+    # any_of already MET: missing leaf cannot swing anything
+    node = AnyOf(id="r", children=[
+        leaf("a", PredicateType.BOOLEAN, "a", True),
+        leaf("b", PredicateType.BOOLEAN, "b", True),
+    ])
+    assert pivotal_leaf_ids(node, facts(fact("a", True))) == []
+
+
+def test_pivotal_includes_low_confidence_found_fact():
+    node = AllOf(id="r", children=[
+        leaf("a", PredicateType.BOOLEAN, "a", True),
+        leaf("b", PredicateType.BOOLEAN, "b", True),
+    ])
+    fs = facts(fact("a", True), fact("b", True))
+    fs["b"].confidence = 0.4  # found but shaky
+    assert pivotal_leaf_ids(node, fs) == ["b"]

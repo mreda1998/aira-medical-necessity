@@ -100,28 +100,29 @@ def evaluate(node: Node, facts: dict[str, Fact],
     return EvalResult(node_id=node.id, kind=node.kind, status=status, children=child_results)
 
 
-def _collect_leaf_ids(node: Node) -> list[str]:
-    if isinstance(node, (LeafNode, UnmappableNode)):
-        return [node.id]
-    ids = []
+def _collect_leaves(node: Node) -> list[LeafNode]:
+    if isinstance(node, LeafNode):
+        return [node]
+    if isinstance(node, UnmappableNode):
+        return []
+    leaves = []
     for c in node.children:
-        ids.extend(_collect_leaf_ids(c))
-    return ids
+        leaves.extend(_collect_leaves(c))
+    return leaves
 
 
 def pivotal_leaf_ids(root: Node, facts: dict[str, Fact]) -> list[str]:
+    """Leaves with weak evidence (missing or low-confidence) that are
+    structurally able to move the root verdict — the re-extraction set."""
     pivotal = []
-    for lid in _collect_leaf_ids(root):
-        forced_met = evaluate(root, facts, {lid: Status.MET}).status
-        forced_not = evaluate(root, facts, {lid: Status.NOT_MET}).status
-        # A leaf is pivotal only if forcing it between MET/NOT_MET produces two
-        # different *conclusive* root verdicts. If either branch is still
-        # INSUFFICIENT, the ambiguity is caused by some other unresolved leaf,
-        # not this one.
-        if (
-            forced_met != forced_not
-            and forced_met != Status.INSUFFICIENT
-            and forced_not != Status.INSUFFICIENT
-        ):
-            pivotal.append(lid)
+    for leaf in _collect_leaves(root):
+        leaf_status = _eval_leaf(leaf, facts).status
+        ev = facts.get(leaf.field)
+        low_conf = ev is not None and ev.found and ev.confidence < 0.6
+        if leaf_status != Status.INSUFFICIENT and not low_conf:
+            continue  # solid evidence — re-extraction is pointless
+        forced_met = evaluate(root, facts, {leaf.id: Status.MET}).status
+        forced_not = evaluate(root, facts, {leaf.id: Status.NOT_MET}).status
+        if forced_met != forced_not:  # structurally able to move the verdict
+            pivotal.append(leaf.id)
     return pivotal
