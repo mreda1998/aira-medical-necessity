@@ -1,11 +1,19 @@
 import re
+from collections.abc import Callable
 
 from pydantic import ValidationError
 
 from .llm import LLM
 from .models import CriteriaTree, Node, LeafNode, AllOf, NOf, PredicateType, UnmappableNode
-from .pdf_extract import extract_text
+from .pdf_extract import (
+    ExtractedDocument,
+    extract_text,
+    resolve_source_span,
+    select_compiler_document,
+)
 from . import store
+
+COMPILER_INPUT_VERSION = "criteria-pages-v1"
 
 COMPILER_SYSTEM = """You convert a payer medical-necessity guideline into a structured criteria tree.
 Output JSON only, matching this schema:
@@ -19,8 +27,10 @@ A <node> is one of:
   {"kind":"any_of","id":str,"children":[<node>...]}   (ANY holds)
   {"kind":"n_of","id":str,"k":int,"children":[<node>...]}  (at least k hold)
   {"kind":"leaf","id":str,"predicate":P,"field":str,"threshold":<val>,"unit":str?,
-   "negated":bool?,"human_readable":str,"source_span":{"text":str},"parse_confidence":float}
-  {"kind":"unmappable","id":str,"human_readable":str,"reason":str,"source_span":{"text":str}}
+   "negated":bool?,"human_readable":str,
+   "source_span":{"text":str,"page":int,"section":str|null},"parse_confidence":float}
+  {"kind":"unmappable","id":str,"human_readable":str,"reason":str,
+   "source_span":{"text":str,"page":int,"section":str|null}}
 
 P (the CLOSED predicate vocabulary — you MUST use only these) is one of:
   "boolean" | "numeric_gt" | "numeric_gte" | "numeric_lt" | "numeric_lte" |
@@ -35,6 +45,8 @@ Rules:
   necessity criteria. Use null when the policy does not state an age applicability boundary.
 - "one or more of the following" -> n_of with k=1.
 - Durations like "at least 3 months" -> duration_gte with field in months, threshold 3.
+- Upper-bounded timing such as "within 12 hours" -> numeric_lte over an elapsed-hours field with
+  threshold 12 and unit "hours". Do not encode it as a negated duration_gte.
 - CEAP class checks -> ordinal_gte with field "ceap_class", threshold like "C2".
 - Vein size "at least 3 mm" -> numeric_gte, field "vein_diameter_mm", threshold 3, unit "mm".
 - Preserve strict comparisons: ">15" -> numeric_gt and "<18" -> numeric_lt. Never weaken them
@@ -45,8 +57,10 @@ Rules:
   are structurally unmeetable — model them faithfully.
 - If a criterion cannot be expressed with the closed vocabulary, emit an "unmappable" node with a
   reason. NEVER invent a predicate type.
-- Every leaf must include a source_span quoting the guideline text it came from and a
-  parse_confidence in [0,1].
+- Every leaf must include a source_span with a verbatim guideline quote, the physical page from
+  the nearest [[PDF PAGE n]] marker, and the nearest visible section heading when available.
+  Quote the complete criterion sentence/bullet rather than a short repeated phrase so local code
+  can verify it uniquely. Every leaf also needs parse_confidence in [0,1].
 - When a single criterion sentence contains multiple ANDed clauses about different clinical
   facts (e.g. "There is demonstrated saphenous reflux AND CEAP class C2 or greater"), emit
   one leaf PER clause under an all_of — never collapse them into one leaf. A reflux
@@ -59,7 +73,10 @@ Rules:
   composite field whose value requires deciding whether the policy language is satisfied.
 - Never encode negation in the field name (no "not_..."/"absence_of_..." fields). Name the
   field for the positive clinical fact (e.g. "insufficiency_secondary_to_dvt") and set
-  "negated": true on the leaf when the guideline requires its absence.
+  "threshold": true and "negated": true on the leaf when the guideline requires its absence.
+  Never combine negated=true with threshold=false; that double-negates the requirement.
+- A required absence of "X or Y" means BOTH positive facts must be absent. Emit an all_of with
+  a separate threshold=true, negated=true boolean leaf for X and for Y.
 - Field names must name the raw clinical quantity or fact, never the comparison: use
   "ceap_class" (not "ceap_class_c2_or_greater"), "vein_diameter_mm" (not
   "varicosities_at_least_3mm"), "compression_therapy_months" (not
@@ -76,8 +93,9 @@ Fidelity examples:
   {"kind":"leaf","predicate":"duration_gte",...} for adjustment duration.
 - Node kind is structural only: all_of, any_of, n_of, leaf, or unmappable. Predicate names such as
   numeric_gt and existence always go in the predicate field of a kind=leaf node.
-- A leaf's human_readable/source_span must not describe logical or numeric clauses that are absent
-  from the emitted structure.
+- A leaf's human_readable must be atomic and must not describe logical or numeric clauses absent
+  from the emitted structure. A complete source_span quote may contain surrounding clauses when
+  those clauses are represented by sibling or ancestor nodes in the same criterion group.
 """
 
 
@@ -119,6 +137,10 @@ def criteria_fidelity_issues(tree: CriteriaTree) -> list[str]:
             return
         if isinstance(node, LeafNode):
             text = _leaf_text(node)
+            # The citation intentionally quotes the complete source criterion, so it may
+            # contain clauses represented by nearby nodes. Collapse checks apply to the
+            # leaf's atomic label; numeric fidelity still uses the source quote.
+            structural_text = node.human_readable.lower()
             has_range = bool(re.search(r"\d+(?:\.\d+)?\s*[–—-]\s*\d+(?:\.\d+)?", text))
             if has_range and node.predicate in {
                 PredicateType.NUMERIC_GT, PredicateType.NUMERIC_GTE,
@@ -127,13 +149,28 @@ def criteria_fidelity_issues(tree: CriteriaTree) -> list[str]:
                 issues.append(
                     f"branch {branch_id} leaf {node.id}: numeric range is missing a lower or upper bound"
                 )
-            if "with at least one" in text and not _has_n_of(parent):
+            if "with at least one" in structural_text and not _has_n_of(parent):
                 issues.append(
                     f"branch {branch_id} leaf {node.id}: 'with at least one' was collapsed into one leaf"
                 )
-            if "despite adjustments over at least" in text and not _has_duration(parent):
+            if "despite adjustments over at least" in structural_text and not _has_duration(parent):
                 issues.append(
                     f"branch {branch_id} leaf {node.id}: adjustment duration was collapsed into one leaf"
+                )
+            if node.negated and node.threshold is False:
+                issues.append(
+                    f"branch {branch_id} leaf {node.id}: negated=true with threshold=false double-negates the requirement"
+                )
+            if (
+                re.search(r"\bwithin\s+\d+(?:\.\d+)?\s+(?:hour|hours|day|days|month|months)\b", structural_text)
+                and (node.predicate == PredicateType.DURATION_GTE or node.negated)
+            ):
+                issues.append(
+                    f"branch {branch_id} leaf {node.id}: upper-bounded timing must use numeric_lte without negation"
+                )
+            if re.search(r"\bno\s+(?:evidence|history)\s+of\b.+\bor\b.+", structural_text):
+                issues.append(
+                    f"branch {branch_id} leaf {node.id}: required absence of alternatives must be split into separate negated leaves"
                 )
             strict_gt = bool(re.search(r">(?![=])|greater than(?!\s+or equal)", text))
             strict_lt = bool(re.search(r"<(?![=])|less than(?!\s+or equal)", text))
@@ -154,14 +191,20 @@ def criteria_fidelity_issues(tree: CriteriaTree) -> list[str]:
     return issues
 
 
-def compile_guideline(text: str, llm: LLM) -> CriteriaTree:
-    user = f"GUIDELINE TEXT:\n{text}\n\nReturn the criteria tree JSON."
-    feedback = ""
+def compile_guideline(
+    text: str,
+    llm: LLM,
+    on_attempt: Callable[[int, int], None] | None = None,
+) -> CriteriaTree:
+    initial_user = f"GUIDELINE TEXT:\n{text}\n\nReturn the criteria tree JSON."
+    prompt = initial_user
     expected_branches: set[str] | None = None
     last_problem = "unknown compiler failure"
 
-    for _attempt in range(3):
-        raw = llm.complete_json(COMPILER_SYSTEM, user + feedback)
+    for attempt in range(1, 4):
+        if on_attempt:
+            on_attempt(attempt, 3)
+        raw = llm.complete_json(COMPILER_SYSTEM, prompt)
         try:
             tree = CriteriaTree.model_validate(raw)
         except ValidationError as exc:
@@ -170,7 +213,7 @@ def compile_guideline(text: str, llm: LLM) -> CriteriaTree:
                 for error in exc.errors()[:8]
             )
             last_problem = "schema validation: " + compact_errors
-            feedback = (
+            prompt = initial_user + (
                 "\n\nThe previous output violated the required JSON schema. Return the complete tree "
                 "again. Every atomic criterion must use kind=leaf and put numeric_gt, existence, "
                 "and other predicate names in the predicate field. Errors:\n- "
@@ -188,8 +231,11 @@ def compile_guideline(text: str, llm: LLM) -> CriteriaTree:
 
         expected_branches = current_branches if expected_branches is None else expected_branches
         last_problem = "; ".join(issues[:8])
-        feedback = (
-            "\n\nPREVIOUS TREE JSON (preserve every branch and unaffected criterion):\n"
+        # A validated tree already carries complete source quotes. Repair its
+        # structure from that compact artifact instead of resending a very long
+        # policy on every deterministic-fidelity retry.
+        prompt = (
+            "PREVIOUS TREE JSON (preserve every branch and unaffected criterion):\n"
             f"{tree.model_dump_json()}\n\nThe previous parse failed deterministic fidelity checks. "
             "Return a corrected full tree with the same branch coverage. Fix every issue below "
             "without dropping other criteria:\n- "
@@ -199,14 +245,57 @@ def compile_guideline(text: str, llm: LLM) -> CriteriaTree:
     raise ValueError("guideline criteria failed validation after retries: " + last_problem)
 
 
-def compile_cached(data: bytes, llm: LLM) -> CriteriaTree:
+def _enrich_source_spans(tree: CriteriaTree, document: ExtractedDocument) -> CriteriaTree:
+    def enrich(node: Node) -> Node:
+        if isinstance(node, (LeafNode, UnmappableNode)):
+            return node.model_copy(update={
+                "source_span": resolve_source_span(node.source_span, document.pages),
+            })
+        return node.model_copy(update={"children": [enrich(child) for child in node.children]})
+
+    return tree.model_copy(update={
+        "branches": [
+            branch.model_copy(update={"root": enrich(branch.root)})
+            for branch in tree.branches
+        ],
+    })
+
+
+def compile_cached(
+    data: bytes,
+    llm: LLM,
+    document: ExtractedDocument | None = None,
+    on_cache: Callable[[bool], None] | None = None,
+    on_attempt: Callable[[int, int], None] | None = None,
+    on_selection: Callable[[int, int, str], None] | None = None,
+) -> CriteriaTree:
     # Key on both the PDF bytes and the compiler prompt: a prompt change (e.g.
     # a fidelity fix like the ANDed-clause-splitting rule above) must bust the
     # cache for guidelines that were already compiled under the old prompt.
-    h = store.content_hash(data + COMPILER_SYSTEM.encode("utf-8"))
+    h = store.content_hash(
+        data
+        + COMPILER_SYSTEM.encode("utf-8")
+        + COMPILER_INPUT_VERSION.encode("utf-8")
+    )
     cached = store.load_tree(h)
+    if on_cache:
+        on_cache(cached is not None)
     if cached is not None:
-        return cached
-    tree = compile_guideline(extract_text(data), llm)
+        return _enrich_source_spans(cached, document) if document else cached
+
+    if document:
+        selection = select_compiler_document(document)
+        if on_selection:
+            on_selection(
+                selection.original_page_count,
+                selection.selected_page_count,
+                selection.strategy,
+            )
+        compiler_text = selection.document.marked_text
+    else:
+        compiler_text = extract_text(data)
+    tree = compile_guideline(compiler_text, llm, on_attempt=on_attempt)
+    if document:
+        tree = _enrich_source_spans(tree, document)
     store.save_tree(h, tree)
     return tree

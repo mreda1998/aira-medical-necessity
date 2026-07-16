@@ -1,4 +1,5 @@
-import { ShieldCheck } from "lucide-react";
+import { useEffect, useMemo } from "react";
+import { AlertTriangle, ShieldCheck } from "lucide-react";
 import type { RunResult, BranchResult } from "../api";
 import { STATUS, leavesOf } from "../lib/status";
 import { CriterionRow } from "./CriterionRow";
@@ -47,7 +48,15 @@ function VerdictBanner({ branch }: { branch: BranchResult }) {
   );
 }
 
-function BranchCard({ branch }: { branch: BranchResult }) {
+function BranchCard({
+  branch,
+  guidelineUrl,
+  chartUrl,
+}: {
+  branch: BranchResult;
+  guidelineUrl?: string;
+  chartUrl?: string;
+}) {
   const leaves = branch.decisive_findings.length > 0
     ? branch.decisive_findings
     : leavesOf(branch.tree);
@@ -82,6 +91,8 @@ function BranchCard({ branch }: { branch: BranchResult }) {
             key={leaf.node_id}
             node={leaf}
             flag={leaf.field ? branch.gap_flags[leaf.field] : undefined}
+            guidelineUrl={guidelineUrl}
+            chartUrl={chartUrl}
           />
         ))}
       </ul>
@@ -89,7 +100,38 @@ function BranchCard({ branch }: { branch: BranchResult }) {
   );
 }
 
-export function ResultView({ result, onReset }: { result: RunResult; onReset: () => void }) {
+export function ResultView({
+  result,
+  guidelineFile,
+  chartFile,
+  onReset,
+}: {
+  result: RunResult;
+  guidelineFile: File | null;
+  chartFile: File | null;
+  onReset: () => void;
+}) {
+  const guidelineUrl = useMemo(
+    () => (guidelineFile ? URL.createObjectURL(guidelineFile) : undefined),
+    [guidelineFile],
+  );
+  const chartUrl = useMemo(
+    () => (chartFile ? URL.createObjectURL(chartFile) : undefined),
+    [chartFile],
+  );
+  useEffect(
+    () => () => {
+      if (guidelineUrl) URL.revokeObjectURL(guidelineUrl);
+      if (chartUrl) URL.revokeObjectURL(chartUrl);
+    },
+    [guidelineUrl, chartUrl],
+  );
+  const documentWarnings = [
+    ...result.guideline_document.warnings,
+    ...result.chart_document.warnings,
+  ];
+  const policyNotApplicable = result.route_flag === "policy_not_applicable";
+
   return (
     <div className="mx-auto w-full max-w-3xl px-5 pb-20 pt-10">
       <div className="mb-5 flex items-center justify-between">
@@ -112,15 +154,53 @@ export function ResultView({ result, onReset }: { result: RunResult; onReset: ()
           </span>
           {result.route_flag && (
             <span className="rounded-pill border border-warn/30 bg-warn-tint px-2.5 py-0.5 text-[12px] font-medium text-warn">
-              {result.route_flag.split("_").join(" ")} — showing all branches
+              {policyNotApplicable
+                ? "policy not applicable"
+                : "ambiguous route - evaluating tied branches"}
             </span>
           )}
         </div>
       </div>
 
+      {documentWarnings.length > 0 && (
+        <div className="mb-6 rounded-2xl border border-warn/25 bg-warn-tint px-5 py-4">
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-warn">
+            <AlertTriangle size={15} />
+            Document checks
+          </div>
+          <ul className="mt-2 space-y-1 text-[13px] leading-relaxed text-ink-soft">
+            {documentWarnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {policyNotApplicable && (
+        <section className="mb-6 rounded-card border border-warn/30 bg-warn-tint p-6 sm:p-7">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-warn text-white">
+              <AlertTriangle size={17} />
+            </span>
+            <div>
+              <p className="text-[16px] font-semibold text-ink">This policy does not cover the requested procedure</p>
+              <p className="mt-1 text-[13.5px] leading-relaxed text-ink-soft">
+                No medical-necessity criteria were evaluated. Select a payer policy whose procedure or
+                billing code matches this chart; this is a policy-selection issue, not a clinical denial.
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+
       <div className="space-y-6">
         {result.evaluated_branches.map((b) => (
-          <BranchCard key={b.branch_id} branch={b} />
+          <BranchCard
+            key={b.branch_id}
+            branch={b}
+            guidelineUrl={guidelineUrl}
+            chartUrl={chartUrl}
+          />
         ))}
       </div>
 

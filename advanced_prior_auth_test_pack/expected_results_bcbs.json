@@ -1,0 +1,71 @@
+{
+  "cases": [
+    {
+      "case_id": "bcbs_case_01_varicose_veins_met",
+      "guideline": "charts/bcbs/mcg.pdf",
+      "chart": "charts/patients_bcbs/bcbs_case_01_varicose_veins_met.pdf",
+      "requested_procedure": "Endovenous radiofrequency ablation of the right great saphenous vein (CPT 36475)",
+      "expected_status": "MET",
+      "logic": {
+        "all": [
+          "demonstrated right great saphenous reflux",
+          "CEAP C3",
+          "varicosities 4.2 to 5.0 mm",
+          {
+            "all": [
+              "persistent reflux-associated pain, swelling, itching, and burning",
+              "significant activities-of-daily-living interference",
+              "five months of compression therapy without improvement"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "bcbs_case_02_carotid_stenting_not_met",
+      "guideline": "charts/bcbs/extracranial_carotid_angioplast_guidelines.pdf",
+      "chart": "charts/patients_bcbs/bcbs_case_02_carotid_stenting_not_met.pdf",
+      "requested_procedure": "Right carotid angioplasty and stenting with distal embolic protection (CPT 37215)",
+      "expected_status": "NOT_MET",
+      "logic": {
+        "all": [
+          "78% right internal carotid stenosis",
+          "focal cerebral ischemia within 120 days lasting less than 24 hours",
+          {
+            "criterion": "anatomic contraindication to carotid endarterectomy",
+            "result": false,
+            "evidence": "record explicitly documents accessible anatomy and suitability for endarterectomy"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "bcbs_case_03_intracranial_thrombectomy_insufficient",
+      "guideline": "charts/bcbs/endovascular_procedures_Intracranial_arterial_guidelines.pdf",
+      "chart": "charts/patients_bcbs/bcbs_case_03_intracranial_thrombectomy_insufficient.pdf",
+      "requested_procedure": "Endovascular mechanical embolectomy for acute ischemic stroke (CPT 61645)",
+      "expected_status": "INSUFFICIENT_EVIDENCE",
+      "logic": {
+        "all": [
+          "proximal left M1 occlusion",
+          "planned treatment within 12 hours",
+          "NIHSS 16",
+          {
+            "criterion": "salvageable brain tissue",
+            "result": "UNKNOWN",
+            "evidence": "ASPECTS and perfusion interpretation absent"
+          },
+          "no intracranial hemorrhage or arterial dissection"
+        ]
+      }
+    },
+    {
+      "case_id": "bcbs_case_04_policy_mismatch",
+      "guideline": "charts/bcbs/mcg.pdf",
+      "chart": "charts/patients_bcbs/robert_mitchell_chart_final.pdf",
+      "requested_procedure": "Permanent single-chamber pacemaker implantation (CPT 33207)",
+      "expected_status": "POLICY_NOT_APPLICABLE",
+      "summary": "The requested pacemaker service is unrelated to the Florida Blue varicose-vein policy and no policy branch should be evaluated."
+    }
+  ]
+}

@@ -25,7 +25,16 @@ class PredicateType(str, Enum):
 
 class SourceSpan(BaseModel):
     text: str
+    # ``page`` is the physical, one-based PDF page used by viewer deep links.
+    # The other fields are locally derived from the verbatim quote and remain
+    # optional so old cached trees and model output stay compatible.
     page: Optional[int] = None
+    printed_page: Optional[str] = None
+    section: Optional[str] = None
+    match_method: Optional[
+        Literal["exact", "fuzzy", "page_verified", "model_reported", "unverified"]
+    ] = None
+    match_confidence: Optional[float] = None
 
 
 class LeafNode(BaseModel):

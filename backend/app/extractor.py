@@ -4,12 +4,18 @@ from pydantic import ValidationError
 
 from .llm import LLM
 from .models import Node, LeafNode, UnmappableNode, Fact
+from .pdf_extract import ExtractedDocument, resolve_source_span
 
 EXTRACTOR_SYSTEM = """You extract clinical facts from a patient chart, but ONLY the fields requested.
 For each requested field return: {"field": str, "value": <number|string|bool|null>,
-"unit": str|null, "state": S, "source_span": {"text": <verbatim quote from chart>},
+"unit": str|null, "state": S,
+"source_span": {"text": <complete verbatim quote from chart>, "page": int, "section": str|null},
 "confidence": float}, where S is exactly one of DOCUMENTED, EXPLICITLY_ABSENT, NOT_DOCUMENTED,
 or CONFLICTING.
+
+Use the nearest [[PDF PAGE n]] marker for page and the nearest visible section heading for section.
+The quote must not include the page marker. Prefer a complete sentence that uniquely identifies the
+source location rather than a short repeated phrase.
 
 Evidence-state rules:
 - DOCUMENTED: the clinical value/finding was actually assessed and is present in the chart.
@@ -76,7 +82,12 @@ def required_fields(root: Node) -> list[dict]:
     return deduped
 
 
-def extract_facts(chart_text: str, root: Node, llm: LLM) -> dict[str, Fact]:
+def extract_facts(
+    chart_text: str,
+    root: Node,
+    llm: LLM,
+    document: ExtractedDocument | None = None,
+) -> dict[str, Fact]:
     fields = required_fields(root)
     user = (f"CHART:\n{chart_text}\n\nExtract these fields:\n{json.dumps(fields, indent=2)}\n"
             "Return JSON {\"facts\": [...]}.")
@@ -86,7 +97,12 @@ def extract_facts(chart_text: str, root: Node, llm: LLM) -> dict[str, Fact]:
         if not isinstance(item, dict) or "field" not in item:
             continue  # malformed entry — the field will default to found=False
         try:
-            by_field[item["field"]] = Fact.model_validate(item)
+            fact = Fact.model_validate(item)
+            if document:
+                fact = fact.model_copy(update={
+                    "source_span": resolve_source_span(fact.source_span, document.pages),
+                })
+            by_field[item["field"]] = fact
         except ValidationError:
             continue  # malformed fact — degrade to found=False for this field
     result: dict[str, Fact] = {}
