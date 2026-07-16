@@ -42,6 +42,17 @@ export function App() {
             <div key={b.branch_id} style={{ marginBottom: 24 }}>
               <h2 style={{ marginBottom: 4 }}>{b.procedure_label}</h2>
               <p style={{ fontWeight: 700 }}>{VERDICT_TEXT[b.verdict]}</p>
+              {Object.keys(b.gap_flags).length > 0 && (
+                <div style={{ background: "#fff7e6", border: "1px solid #a56300", borderRadius: 4,
+                              padding: "8px 12px", margin: "8px 0", fontSize: 13 }}>
+                  <strong style={{ color: "#a56300" }}>⚑ Verifier disagreement — review these fields:</strong>
+                  <ul style={{ margin: "4px 0 0 18px" }}>
+                    {Object.entries(b.gap_flags).map(([field, flag]) => (
+                      <li key={field}>{field} ({flag.split("_").join(" ")})</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <GapList tree={b.tree} />
             </div>
           ))}
