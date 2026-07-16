@@ -151,6 +151,14 @@ def test_boolean_predicate_coerces_string_negation():
     assert evaluate(l, facts(fact("b", True))).status == Status.MET
 
 
+def test_boolean_predicate_unrecognized_string_is_insufficient():
+    l = leaf("b", PredicateType.BOOLEAN, "b", True)
+    assert evaluate(l, facts(fact("b", "unclear finding"))).status == Status.INSUFFICIENT
+    assert evaluate(l, facts(fact("b", "not assessed"))).status == Status.INSUFFICIENT
+    assert evaluate(l, facts(fact("b", "0"))).status == Status.NOT_MET
+    assert evaluate(l, facts(fact("b", "1"))).status == Status.MET
+
+
 def test_pivotal_leaf_ids_custom_threshold_widens_low_conf_band():
     # b found at confidence 0.7: default (0.6) threshold treats it as solid
     # evidence and excludes it; a wider 0.75 threshold (as used by the

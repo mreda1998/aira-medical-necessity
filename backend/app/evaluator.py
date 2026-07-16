@@ -7,7 +7,7 @@ from .models import (
 from .reference import compare_ordinal, parse_measurement
 
 
-_FALSY_STRINGS = {"false", "no", "absent", "denied", "none", "negative"}
+_FALSY_STRINGS = {"false", "no", "absent", "denied", "none", "negative", "0"}
 _TRUTHY_STRINGS = {"true", "yes", "1", "present"}
 
 
@@ -49,6 +49,8 @@ def _apply_predicate(leaf: LeafNode, f: Fact) -> Status:
             effective = False
         elif _is_explicit_affirmation(v):
             effective = True
+        elif isinstance(v, str):
+            return Status.INSUFFICIENT
         else:
             effective = bool(v)
         return Status.MET if effective == bool(want) else Status.NOT_MET
