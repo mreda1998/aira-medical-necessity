@@ -9,6 +9,9 @@ EXTRACTOR_SYSTEM = """You extract clinical facts from a patient chart, but ONLY 
 For each requested field return: {"field": str, "value": <number|string|bool|null>,
 "unit": str|null, "found": bool, "source_span": {"text": <verbatim quote from chart>},
 "confidence": float}. If the chart does not document a field, return found=false and value=null.
+If the chart explicitly denies or negates a finding (e.g. "no ulceration", "denies bleeding"),
+return found=true with value=false — reserve found=false for findings the chart does not
+address at all.
 Do NOT infer facts that are not supported by the chart text. Return JSON: {"facts": [ ... ]}."""
 
 

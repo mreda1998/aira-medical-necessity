@@ -39,6 +39,9 @@ Rules:
   a CEAP classification is its own ordinal_gte leaf (field "ceap_class").
 - Every distinct evidentiary requirement in the guideline must map to its own leaf so a
   chart missing that specific evidence produces a visible gap.
+- Never encode negation in the field name (no "not_..."/"absence_of_..." fields). Name the
+  field for the positive clinical fact (e.g. "insufficiency_secondary_to_dvt") and set
+  "negated": true on the leaf when the guideline requires its absence.
 """
 
 
