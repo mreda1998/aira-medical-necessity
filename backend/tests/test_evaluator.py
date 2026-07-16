@@ -24,6 +24,11 @@ def test_leaf_met_not_met_insufficient():
     assert evaluate(l, {}).status == Status.INSUFFICIENT
 
 
+def test_numeric_leaf_with_boolean_value_is_insufficient():
+    l = leaf("d", PredicateType.NUMERIC_GTE, "vein_diameter_mm", 3)
+    assert evaluate(l, facts(fact("vein_diameter_mm", True))).status == Status.INSUFFICIENT
+
+
 def test_ordinal_leaf():
     l = leaf("c", PredicateType.ORDINAL_GTE, "ceap_class", "C2")
     assert evaluate(l, facts(fact("ceap_class", "C3"))).status == Status.MET

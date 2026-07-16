@@ -21,6 +21,8 @@ def compare_ordinal(a: str, b: str) -> int:
 
 
 def parse_measurement(value) -> Optional[float]:
+    if isinstance(value, bool):
+        return None  # a bare true/false is not a measurement — treat as missing
     if isinstance(value, (int, float)):
         return float(value)
     if not isinstance(value, str):

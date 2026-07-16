@@ -42,6 +42,12 @@ Rules:
 - Never encode negation in the field name (no "not_..."/"absence_of_..." fields). Name the
   field for the positive clinical fact (e.g. "insufficiency_secondary_to_dvt") and set
   "negated": true on the leaf when the guideline requires its absence.
+- Field names must name the raw clinical quantity or fact, never the comparison: use
+  "ceap_class" (not "ceap_class_c2_or_greater"), "vein_diameter_mm" (not
+  "varicosities_at_least_3mm"), "compression_therapy_months" (not
+  "conservative_management_3_months"). The threshold belongs in "threshold", never in the
+  field name — a field named after its threshold pushes chart extraction toward useless
+  true/false answers instead of the measurable value.
 """
 
 

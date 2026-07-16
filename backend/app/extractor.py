@@ -12,7 +12,11 @@ For each requested field return: {"field": str, "value": <number|string|bool|nul
 If the chart explicitly denies or negates a finding (e.g. "no ulceration", "denies bleeding"),
 return found=true with value=false — reserve found=false for findings the chart does not
 address at all.
-Do NOT infer facts that are not supported by the chart text. Return JSON: {"facts": [ ... ]}."""
+Do NOT infer facts that are not supported by the chart text.
+For numeric, duration, or classification fields (the requested field list shows each field's
+predicate and unit), "value" must be the actual quantity or class from the chart ("5 mm",
+6.5, "C4a", "4 months") — never true/false. Reserve booleans for boolean/existence fields.
+Return JSON: {"facts": [ ... ]}."""
 
 
 def required_fields(root: Node) -> list[dict]:

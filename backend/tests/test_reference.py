@@ -21,6 +21,11 @@ def test_parse_measurement_takes_lower_bound():
     assert parse_measurement("no measurement") is None
 
 
+def test_parse_measurement_rejects_booleans():
+    assert parse_measurement(True) is None
+    assert parse_measurement(False) is None
+
+
 def test_vein_synonyms():
     assert canonical_vein("GSV") == "great_saphenous"
     assert canonical_vein("great saphenous vein") == "great_saphenous"
