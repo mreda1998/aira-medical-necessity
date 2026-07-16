@@ -21,31 +21,24 @@ compiles the guideline into a criteria tree (data) and extracts patient facts fr
 a pure-Python three-valued evaluator (code) produces the verdict. A second model re-verifies only
 the leaves the verdict actually hinges on.
 
-## Debugging a run
-
-Every request logs its pipeline stages to stdout (visible in `docker compose logs -f`):
-guideline compile, chart extraction, order routing, per-branch fact extraction, verifier
-activity, and the final verdict. Failures log a full traceback and return a `502` whose
-`detail` names the real error.
-
-To capture the intermediate JSON at **every step** (compiled criteria tree, extracted order,
-per-branch facts, verifier output, verdict tree):
-
-- Per request: add the form field `debug=true` — the response gains a `debug` array, and one
-  JSON file per step is written under `DEBUG_DIR` (default `/data/debug/<timestamp>/`).
-- For all requests: set `AIRA_DEBUG=1` in `.env`.
-- Set `LOG_LEVEL=DEBUG` to also log the full LLM prompts and responses.
-
-```bash
-# capture the full step-by-step trace for one chart
-curl -s -F guideline=@guideline.pdf -F chart=@chart.pdf -F debug=true \
-  http://localhost:8000/api/evaluate | jq '.debug[].step'
-# the JSON artifacts land in the mounted volume:
-docker compose exec app ls -R /data/debug
-```
-
 ## Tests
-
+I have added tests for every step of the process, we also generated patients data that can be matched against different verdicts (MEETS / DOES NOT MEET / INCOMPLETE). Those are present under the folder advanced_prior_auth_test_pack and other guidelines from Florida Blue were also integrated for testing purposes.
 ```bash
 pip install -e ".[dev]" && pytest
 ```
+Scenario 1: Patient Meets 
+<img width="1306" height="1634" alt="image" src="https://github.com/user-attachments/assets/459d4508-f9cb-4eee-9275-6c3456c5bf71" />
+
+Scenario 2: Incomplete Evidence
+<img width="1320" height="1238" alt="image" src="https://github.com/user-attachments/assets/a80ba3ce-4f59-404d-8abc-a2ee7c1558b2" />
+
+Scenario 3: Does Not Meet
+<img width="1316" height="1596" alt="image" src="https://github.com/user-attachments/assets/0114d647-d1e1-4964-8436-9ea7fe21b90c" />
+
+Scenario 4: Policy Not Applicable
+<img width="1286" height="806" alt="image" src="https://github.com/user-attachments/assets/c1730555-8a6b-4b82-9fc1-8cd876579688" />
+
+
+
+
+
