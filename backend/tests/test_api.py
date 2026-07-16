@@ -40,6 +40,40 @@ def test_evaluate(monkeypatch, tmp_path):
     assert resp.json()["evaluated_branches"][0]["verdict"] == "MET"
 
 
+def test_evaluate_debug_returns_and_writes_trace(monkeypatch, tmp_path):
+    monkeypatch.setenv("CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("DEBUG_DIR", str(tmp_path / "debug"))
+    import importlib
+    from app import store as app_store, compiler as app_compiler, pipeline as app_pipeline
+    from app import main as app_main
+    importlib.reload(app_store); importlib.reload(app_compiler); importlib.reload(app_pipeline)
+    importlib.reload(app_main)
+    monkeypatch.setattr(app_pipeline, "extract_text", lambda b: "text")
+    monkeypatch.setattr(app_compiler, "extract_text", lambda b: "text")
+    app_main.app.dependency_overrides[app_main.get_clients] = lambda: (
+        FakeLLM([TREE_JSON, ORDER_JSON, FACTS_JSON]), FakeLLM([]))
+    try:
+        client = TestClient(app_main.app)
+        resp = client.post(
+            "/api/evaluate",
+            data={"debug": "true"},
+            files={"guideline": ("g.pdf", b"dbg-guideline", "application/pdf"),
+                   "chart": ("c.pdf", b"dbg-chart", "application/pdf")},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["evaluated_branches"][0]["verdict"] == "MET"
+        steps = {s["step"] for s in body["debug"]}
+        assert {"guideline_tree", "order", "facts:saphenous", "verdict:saphenous"} <= steps
+        # per-step JSON files were written to DEBUG_DIR
+        written = list((tmp_path / "debug").rglob("*.json"))
+        assert any("guideline_tree" in p.name for p in written)
+    finally:
+        app_main.app.dependency_overrides.clear()
+        importlib.reload(app_store); importlib.reload(app_compiler)
+        importlib.reload(app_pipeline); importlib.reload(app_main)
+
+
 def test_evaluate_invalid_tree_returns_502(monkeypatch, tmp_path):
     monkeypatch.setenv("CACHE_DIR", str(tmp_path))
     import importlib
