@@ -36,9 +36,9 @@ async def evaluate_endpoint(
         raise HTTPException(
             status_code=502,
             detail=f"guideline compilation produced an invalid criteria tree: {first_error}",
-        )
-    except (PdfReadError, ValueError):
-        raise HTTPException(status_code=400, detail="could not read PDF input")
+        ) from exc
+    except (PdfReadError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="could not read PDF input") from exc
 
 
 _dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
