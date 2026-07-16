@@ -16,7 +16,7 @@ Open http://localhost:8000, upload a guideline PDF and a chart PDF, and read the
 
 ## Design
 
-See `docs/superpowers/specs/2026-07-15-medical-necessity-checker-design.md`. In short: the LLM
+See [DESIGN_NOTE.md](DESIGN_NOTE.md) (the short version: where the judgment lives and what breaks first) and `docs/superpowers/specs/2026-07-15-medical-necessity-checker-design.md` (full spec). In short: the LLM
 compiles the guideline into a criteria tree (data) and extracts patient facts from the chart (data);
 a pure-Python three-valued evaluator (code) produces the verdict. A second model re-verifies only
 the leaves the verdict actually hinges on.
