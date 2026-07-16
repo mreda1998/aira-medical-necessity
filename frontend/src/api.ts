@@ -13,6 +13,8 @@ export interface RunResult {
   guideline_id: string; title: string;
   order: { modality?: string; vein?: string; laterality?: string; cpt?: string };
   route_flag?: string | null; evaluated_branches: BranchResult[];
+  /** ordered per-step intermediate artifacts; present only in debug mode */
+  debug?: { step: string; data: unknown }[] | null;
 }
 
 export async function evaluate(guideline: File, chart: File): Promise<RunResult> {

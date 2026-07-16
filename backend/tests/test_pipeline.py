@@ -44,6 +44,26 @@ def test_run_end_to_end_with_fakes(tmp_path, monkeypatch):
         verifier = FakeLLM([])
         result = app.pipeline.run(b"g", b"c", primary, verifier)
         assert result.evaluated_branches[0].verdict == Status.MET
+        # no tracer passed -> no debug payload
+        assert result.debug is None
+
+        # with a tracer, every pipeline step is captured for debugging
+        from app.trace import Tracer
+
+        tracer = Tracer()
+        primary2 = FakeLLM([ORDER_JSON, FACTS_JSON])  # guideline now cached, no recompile
+        result2 = app.pipeline.run(b"g", b"c", primary2, FakeLLM([]), tracer)
+        steps = {s["step"] for s in result2.debug}
+        assert "guideline_tree" in steps
+        assert "order" in steps
+        assert "facts:saphenous" in steps
+        assert "verdict:saphenous" in steps
+        # the captured verdict matches the returned one, and is JSON-serializable
+        import json
+
+        json.dumps(result2.debug)
+        verdict_step = next(s for s in result2.debug if s["step"] == "verdict:saphenous")
+        assert verdict_step["data"]["verdict"] == "MET"
     finally:
         monkeypatch.undo()
         importlib.reload(app.store)
