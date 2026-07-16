@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
@@ -32,12 +33,16 @@ async def evaluate_endpoint(
     try:
         return run(guideline_bytes, chart_bytes, primary, verifier)
     except ValidationError as exc:
-        first_error = exc.errors()[0]["msg"]
         raise HTTPException(
             status_code=502,
-            detail=f"guideline compilation produced an invalid criteria tree: {first_error}",
+            detail=f"LLM output failed validation: {exc.errors()[0]['msg']}",
         ) from exc
-    except (PdfReadError, ValueError) as exc:
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="LLM returned malformed JSON",
+        ) from exc
+    except PdfReadError as exc:
         raise HTTPException(status_code=400, detail="could not read PDF input") from exc
 
 
