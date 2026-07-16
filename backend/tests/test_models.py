@@ -59,8 +59,12 @@ def test_fact_evidence_state_is_source_of_truth_with_legacy_projection():
 
 
 def test_untested_types_roundtrip():
-    span = SourceSpan(text="quote from guideline")
+    span = SourceSpan(
+        text="quote from guideline", page=3, printed_page="2",
+        section="Coverage Policy", match_method="exact", match_confidence=1.0,
+    )
     assert SourceSpan.model_validate(span.model_dump()).text == "quote from guideline"
+    assert SourceSpan.model_validate(span.model_dump()).section == "Coverage Policy"
 
     any_of = AnyOf(id="r", children=[
         LeafNode(id="a", predicate=PredicateType.BOOLEAN, field="a", threshold=True, human_readable="a"),

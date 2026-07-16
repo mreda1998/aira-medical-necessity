@@ -1,6 +1,7 @@
 from app.llm import FakeLLM
 from app.models import AllOf, LeafNode, PredicateType
 from app.extractor import required_fields, extract_facts
+from app.pdf_extract import ExtractedDocument, PageText
 
 
 ROOT = AllOf(id="r", children=[
@@ -30,6 +31,23 @@ def test_extract_facts_maps_and_defaults_missing():
     assert facts["vein_diameter_mm"].value == 5
     assert facts["saphenous_reflux_demonstrated"].found is False
     assert "vein_diameter_mm" in fake.calls[0]["user"]  # guided by the field list
+
+
+def test_extract_facts_resolves_verbatim_quote_to_chart_page():
+    document = ExtractedDocument(pages=(
+        PageText(number=1, text="Patient demographics and history"),
+        PageText(number=2, text="6. VASCULAR STUDY\nThe great saphenous vein measures 5 mm."),
+    ))
+    fake = FakeLLM([{"facts": [{
+        "field": "vein_diameter_mm", "value": 5, "unit": "mm",
+        "state": "DOCUMENTED", "source_span": {"text": "measures 5 mm"},
+        "confidence": 0.9,
+    }]}])
+    facts = extract_facts(document.text, ROOT, fake, document)
+    span = facts["vein_diameter_mm"].source_span
+    assert span.page == 2
+    assert span.section == "6. VASCULAR STUDY"
+    assert span.match_method == "exact"
 
 
 def test_extract_facts_survives_null_facts_list():

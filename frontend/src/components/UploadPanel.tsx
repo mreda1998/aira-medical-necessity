@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileText, UploadCloud, X, ArrowRight, Loader2 } from "lucide-react";
+import type { EvaluationProgress } from "../api";
 
 interface DropFieldProps {
   label: string;
@@ -77,6 +78,7 @@ interface UploadPanelProps {
   guideline: File | null;
   chart: File | null;
   loading: boolean;
+  progress: EvaluationProgress | null;
   error: string | null;
   onGuideline: (f: File | null) => void;
   onChart: (f: File | null) => void;
@@ -84,8 +86,21 @@ interface UploadPanelProps {
 }
 
 export function UploadPanel(props: UploadPanelProps) {
-  const { guideline, chart, loading, error } = props;
+  const { guideline, chart, loading, progress, error } = props;
+  const [elapsed, setElapsed] = useState(0);
   const ready = !!guideline && !!chart && !loading;
+
+  useEffect(() => {
+    if (!loading) {
+      setElapsed(0);
+      return;
+    }
+    const started = Date.now();
+    const update = () => setElapsed(Math.floor((Date.now() - started) / 1000));
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [loading]);
 
   return (
     <div className="mx-auto w-full max-w-xl px-5 pt-16">
@@ -140,9 +155,26 @@ export function UploadPanel(props: UploadPanelProps) {
         </button>
 
         {loading && (
-          <p className="mt-3 text-center text-[12.5px] text-ink-faint">
-            Compiling the guideline and reading the chart — a new guideline can take ~20s.
-          </p>
+          <div
+            className="mt-4 rounded-xl border border-line bg-canvas px-4 py-3"
+            aria-live="polite"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-mint-deep">
+                {(progress?.stage ?? "upload").split("_").join(" ")}
+              </p>
+              <span className="text-[11.5px] tabular-nums text-ink-faint">{elapsed}s</span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-line/70">
+              <div className="h-full w-2/3 animate-pulse rounded-full bg-mint" />
+            </div>
+            <p className="mt-2 text-[12.5px] leading-relaxed text-ink-soft">
+              {progress?.message ?? "Uploading both PDFs"}
+              {progress?.current && progress.total
+                ? ` (${progress.current}/${progress.total})`
+                : ""}
+            </p>
+          </div>
         )}
       </div>
     </div>

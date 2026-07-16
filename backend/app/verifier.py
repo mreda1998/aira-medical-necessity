@@ -6,6 +6,7 @@ from .llm import LLM
 from .models import Node, LeafNode, UnmappableNode, Fact
 from .evaluator import pivotal_leaf_ids
 from .extractor import EXTRACTOR_SYSTEM, field_spec
+from .pdf_extract import ExtractedDocument, resolve_source_span
 from .reference import parse_measurement, compare_ordinal
 
 
@@ -61,7 +62,9 @@ def leaves_to_verify(root: Node, facts: dict[str, Fact]) -> list[str]:
 
 
 def verify_facts(chart_text: str, root: Node, facts: dict[str, Fact],
-                  leaf_ids: list[str], verifier: LLM) -> tuple[dict[str, Fact], dict[str, str]]:
+                  leaf_ids: list[str], verifier: LLM,
+                  document: ExtractedDocument | None = None,
+                  ) -> tuple[dict[str, Fact], dict[str, str]]:
     leaves = _leaf_by_id(root)
     fields = []
     predicates: dict[str, str] = {}
@@ -80,7 +83,12 @@ def verify_facts(chart_text: str, root: Node, facts: dict[str, Fact],
         if not isinstance(item, dict) or "field" not in item:
             continue  # malformed entry — no verification signal for this field
         try:
-            v_by_field[item["field"]] = Fact.model_validate(item)
+            fact = Fact.model_validate(item)
+            if document:
+                fact = fact.model_copy(update={
+                    "source_span": resolve_source_span(fact.source_span, document.pages),
+                })
+            v_by_field[item["field"]] = fact
         except ValidationError:
             continue  # malformed fact — no verification signal for this field
 

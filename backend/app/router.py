@@ -82,4 +82,6 @@ def select_branch(order: Order, tree: CriteriaTree) -> tuple[list[CriteriaBranch
         if len(matches) == 1:
             return matches, None
         return matches, "ambiguous_route"
-    return list(tree.branches), "ambiguous_route"
+    # A policy mismatch is not a clinical failure and must not trigger costly
+    # extraction against every unrelated branch.
+    return [], "policy_not_applicable"

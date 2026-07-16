@@ -1,23 +1,87 @@
-import { FileText, AlertTriangle } from "lucide-react";
-import type { EvalNode } from "../api";
+import { FileText, AlertTriangle, ExternalLink } from "lucide-react";
+import type { EvalNode, EvidenceState, SourceSpan } from "../api";
 import { STATUS } from "../lib/status";
 
-function evidenceText(node: EvalNode): { quote: string | null; missing: boolean } {
-  const ev = node.evidence;
-  if (!ev || !ev.found) return { quote: null, missing: true };
-  const quote = ev.source_span?.text?.trim();
-  if (quote) return { quote, missing: false };
-  // found but no span — fall back to the value
-  const v = ev.value;
-  if (v !== undefined && v !== null && v !== "")
-    return { quote: `Documented: ${String(v)}`, missing: false };
-  return { quote: "Documented", missing: false };
+function CitationLink({
+  label,
+  span,
+  fileUrl,
+}: {
+  label: string;
+  span?: SourceSpan;
+  fileUrl?: string;
+}) {
+  if (!span?.text) return null;
+  const verified =
+    span.page !== undefined &&
+    span.match_method !== "unverified" &&
+    span.match_method !== "model_reported";
+  const page = span.page ? `PDF p. ${span.page}` : "location unverified";
+  const printed =
+    span.printed_page && span.printed_page !== String(span.page)
+      ? ` · document p. ${span.printed_page}`
+      : "";
+  const text = `${label} · ${page}${printed}${span.section ? ` · ${span.section}` : ""}`;
+
+  if (!verified || !fileUrl) {
+    return <span className="text-[12px] font-medium text-ink-faint">{text}</span>;
+  }
+  return (
+    <a
+      href={`${fileUrl}#page=${span.page}`}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex max-w-full items-center gap-1.5 rounded-pill border border-line bg-canvas px-2.5 py-1 text-[12px] font-medium text-ink-soft transition hover:border-mint/60 hover:text-mint-deep"
+      title={`Open ${label.toLowerCase()} at PDF page ${span.page}`}
+    >
+      <span className="truncate">{text}</span>
+      <ExternalLink size={11} className="shrink-0" />
+    </a>
+  );
 }
 
-export function CriterionRow({ node, flag }: { node: EvalNode; flag?: string }) {
+function evidenceState(node: EvalNode): EvidenceState {
+  if (node.evidence?.state) return node.evidence.state;
+  return node.evidence?.found ? "DOCUMENTED" : "NOT_DOCUMENTED";
+}
+
+function evidenceText(node: EvalNode): { label: string; quote: string | null } {
+  const evidence = node.evidence;
+  const quote = evidence?.source_span?.text?.trim() || null;
+  switch (evidenceState(node)) {
+    case "CONFLICTING":
+      return { label: "Conflicting chart evidence", quote };
+    case "NOT_DOCUMENTED":
+      return { label: "Not documented in chart", quote };
+    case "EXPLICITLY_ABSENT":
+      return { label: "Explicitly absent", quote };
+    case "DOCUMENTED": {
+      if (quote) return { label: "Documented", quote };
+      const value = evidence?.value;
+      return {
+        label: "Documented",
+        quote: value !== undefined && value !== null && value !== "" ? String(value) : null,
+      };
+    }
+  }
+}
+
+export function CriterionRow({
+  node,
+  flag,
+  guidelineUrl,
+  chartUrl,
+}: {
+  node: EvalNode;
+  flag?: string;
+  guidelineUrl?: string;
+  chartUrl?: string;
+}) {
   const style = STATUS[node.status];
   const Icon = style.icon;
-  const { quote, missing } = evidenceText(node);
+  const evidence = evidenceText(node);
+  const state = evidenceState(node);
+  const unresolved = state === "NOT_DOCUMENTED" || state === "CONFLICTING";
   const unmappable = node.kind === "unmappable";
 
   return (
@@ -34,27 +98,38 @@ export function CriterionRow({ node, flag }: { node: EvalNode; flag?: string }) 
         </p>
 
         {node.guideline_span?.text && (
-          <p className="mt-1 text-[13.5px] leading-relaxed text-ink-soft">
-            {node.guideline_span.text.trim()}
-          </p>
+          <div className="mt-1.5">
+            <p className="text-[13.5px] leading-relaxed text-ink-soft">
+              {node.guideline_span.text.trim()}
+            </p>
+            <div className="mt-2">
+              <CitationLink label="Guideline" span={node.guideline_span} fileUrl={guidelineUrl} />
+            </div>
+          </div>
         )}
 
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">
+        <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px]">
           {unmappable ? (
             <span className="inline-flex items-center gap-1.5 font-medium text-warn">
               <AlertTriangle size={13} />
               Rule could not be mapped — needs manual review
             </span>
-          ) : missing ? (
-            <span className="inline-flex items-center gap-1.5 font-medium text-ink-faint">
-              <FileText size={13} />
-              Not found in chart
-            </span>
           ) : (
-            <span className={`inline-flex items-center gap-1.5 font-medium ${style.fg}`}>
-              <FileText size={13} />
-              {quote}
+            <span
+              className={`inline-flex items-start gap-1.5 font-medium ${
+                unresolved ? "text-warn" : style.fg
+              }`}
+            >
+              {unresolved ? <AlertTriangle size={13} className="mt-0.5" /> : <FileText size={13} className="mt-0.5" />}
+              <span>
+                {evidence.label}
+                {evidence.quote ? ` — “${evidence.quote}”` : ""}
+              </span>
             </span>
+          )}
+
+          {!unmappable && node.evidence?.source_span && (
+            <CitationLink label="Chart" span={node.evidence.source_span} fileUrl={chartUrl} />
           )}
 
           {flag && (

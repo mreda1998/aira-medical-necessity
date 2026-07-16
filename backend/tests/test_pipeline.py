@@ -1,5 +1,6 @@
 from app.llm import FakeLLM
 from app.models import Status
+from app.pdf_extract import ExtractedDocument, PageText
 from pathlib import Path
 
 SAMPLES = Path(__file__).parent / "samples"
@@ -24,6 +25,12 @@ FACTS_JSON = {"facts": [
 ]}
 
 
+def _fake_document(_data: bytes) -> ExtractedDocument:
+    return ExtractedDocument(pages=(
+        PageText(number=1, text="RFA right GSV. Reflux present. The vein measures 5 mm."),
+    ))
+
+
 def test_run_end_to_end_with_fakes(tmp_path, monkeypatch):
     # NOTE: importlib.reload() mutates the module object *in place*, so
     # app.compiler's `from . import store` reference also picks up the
@@ -37,18 +44,26 @@ def test_run_end_to_end_with_fakes(tmp_path, monkeypatch):
     importlib.reload(app.store)
     importlib.reload(app.compiler)
     importlib.reload(app.pipeline)
-    monkeypatch.setattr(app.pipeline, "extract_text", lambda b: "text")
+    monkeypatch.setattr(app.pipeline, "extract_document", _fake_document)
     monkeypatch.setattr(app.compiler, "extract_text", lambda b: "text")
     try:
         primary = FakeLLM([TREE_JSON, ORDER_JSON, FACTS_JSON])
         verifier = FakeLLM([])
-        result = app.pipeline.run(b"g", b"c", primary, verifier)
+        progress = []
+        result = app.pipeline.run(b"g", b"c", primary, verifier, progress=progress.append)
         assert result.evaluated_branches[0].verdict == Status.MET
+        assert result.chart_document.page_count == 1
+        assert result.evaluated_branches[0].decisive_findings[0].evidence.source_span.page == 1
         assert [f.node_id for f in result.evaluated_branches[0].decisive_findings] == [
             "reflux", "size"
         ]
         # no tracer passed -> no debug payload
         assert result.debug is None
+        stages = [update.stage for update in progress]
+        assert stages[0] == "document_preflight"
+        assert "guideline_compilation" in stages
+        assert "branch_extraction" in stages
+        assert stages[-1] == "complete"
 
         # with a tracer, every pipeline step is captured for debugging
         from app.trace import Tracer
@@ -57,6 +72,7 @@ def test_run_end_to_end_with_fakes(tmp_path, monkeypatch):
         primary2 = FakeLLM([ORDER_JSON, FACTS_JSON])  # guideline now cached, no recompile
         result2 = app.pipeline.run(b"g", b"c", primary2, FakeLLM([]), tracer)
         steps = {s["step"] for s in result2.debug}
+        assert "document_preflight" in steps
         assert "guideline_tree" in steps
         assert "order" in steps
         assert "facts:saphenous" in steps
@@ -67,6 +83,19 @@ def test_run_end_to_end_with_fakes(tmp_path, monkeypatch):
         json.dumps(result2.debug)
         verdict_step = next(s for s in result2.debug if s["step"] == "verdict:saphenous")
         assert verdict_step["data"]["verdict"] == "MET"
+
+        # A procedure unrelated to the cached policy stops at routing. No fact
+        # extraction response is queued, so evaluating a branch would fail.
+        mismatch = {
+            "modality": "Permanent cardiac pacemaker implantation",
+            "cpt": "33207",
+            "raw": "Permanent pacemaker CPT 33207",
+        }
+        mismatch_primary = FakeLLM([mismatch])
+        mismatch_result = app.pipeline.run(b"g", b"c", mismatch_primary, FakeLLM([]))
+        assert mismatch_result.route_flag == "policy_not_applicable"
+        assert mismatch_result.evaluated_branches == []
+        assert len(mismatch_primary.calls) == 1
     finally:
         monkeypatch.undo()
         importlib.reload(app.store)

@@ -28,9 +28,25 @@ def test_select_branch_single_match():
     assert flag is None
 
 
-def test_select_branch_ambiguous_falls_back_to_all():
+def test_select_branch_no_match_returns_policy_not_applicable():
     branches, flag = select_branch(Order(vein=None), TREE)
-    assert len(branches) == 2
+    assert branches == []
+    assert flag == "policy_not_applicable"
+
+
+def test_select_branch_equal_best_scores_remain_ambiguous():
+    tree = CriteriaTree.model_validate({
+        "guideline_id": "g", "title": "t", "branches": [
+            {"branch_id": "one", "procedure_codes": ["12345"], "procedure_label": "one",
+             "root": {"kind": "leaf", "id": "x", "predicate": "existence",
+                      "field": "x", "human_readable": "x"}},
+            {"branch_id": "two", "procedure_codes": ["12345"], "procedure_label": "two",
+             "root": {"kind": "leaf", "id": "y", "predicate": "existence",
+                      "field": "y", "human_readable": "y"}},
+        ],
+    })
+    branches, flag = select_branch(Order(cpt="12345"), tree)
+    assert [branch.branch_id for branch in branches] == ["one", "two"]
     assert flag == "ambiguous_route"
 
 

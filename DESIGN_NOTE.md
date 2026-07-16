@@ -27,11 +27,13 @@ vary, and cached criteria trees preserve the first accepted policy extraction.
 ## Implemented pipeline
 
 ```text
-Guideline PDF ──pypdf──> text ──OpenAI──> criteria tree ──schema/fidelity checks──> disk cache
+Guideline PDF ──pypdf──> page-aware text ──OpenAI──> criteria tree ──checks──> disk cache
                                                                   │
-Chart PDF ──────pypdf──> text ──OpenAI──> order ──deterministic routing──> branch(es)
+Chart PDF ──────pypdf──> page-aware text ──OpenAI──> order ──deterministic routing
                                                                   │
                                       OpenAI extracts requested raw facts only
+                                                                  │
+                                local quote-to-page source verification
                                                                   │
                                    deterministic three-valued evaluation
                                                                   │
@@ -40,10 +42,12 @@ Chart PDF ──────pypdf──> text ──OpenAI──> order ──de
                                verdict + decisive findings + review flags
 ```
 
-PDFs are currently converted to text locally with `pypdf`. The application does **not** yet send
-PDFs as OpenAI file inputs, and it uses Chat Completions JSON mode rather than strict Structured
-Outputs. Migrating that input/schema boundary is the next planned step; it does not change the
-deterministic evaluator boundary.
+PDFs are currently converted to page-aware text locally with `pypdf`. A preflight records page and
+text coverage, warns about long or partly unreadable documents, and rejects PDFs with no usable text
+layer before the first model call. The application does **not** yet send PDFs as OpenAI file inputs,
+and it continues to use Chat Completions JSON mode. For a policy longer than 40 pages, local code
+uses a table-of-contents background/reference boundary only when it can do so deterministically;
+otherwise it preserves the full policy. The full PDF always remains available for citation checks.
 
 ### Policy representation
 
@@ -62,11 +66,95 @@ Negation is represented by `negated: true` on a leaf. Policy comparisons remain 
 tree; they are deliberately excluded from chart-extraction requests so the LLM returns a raw value
 such as `33.3`, not a policy conclusion such as `false`.
 
+### How AND, OR, EITHER, ANY, and N-of become executable logic
+
+The policy compiler identifies the logical wording and emits a recursive tree. The evaluator never
+asks an LLM whether the overall rule is satisfied; it executes the accepted tree in code.
+
+| Guideline wording | Tree representation | Executed meaning |
+|---|---|---|
+| “all of the following,” “each,” or clauses joined by `AND` | `all_of` | Every child must be `MET` |
+| “either,” “any of the following,” or alternatives joined by `OR` | `any_of` | At least one child must be `MET` |
+| “one or more of the following” | `n_of(k=1)` | At least one child must be `MET`, while preserving the explicit cardinality |
+| “at least k of the following” | `n_of(k=k)` | At least `k` children must be `MET` |
+| A single measurable or documentable requirement | `leaf` | Apply its authored predicate to one raw chart fact |
+| A rule that cannot be expressed by the closed vocabulary | `unmappable` | Stop that path as `INSUFFICIENT_EVIDENCE` |
+
+The nodes are recursively nestable, so an `any_of` can contain an `all_of`, and an `all_of` can
+contain an `n_of` or another `any_of`. Bounded ranges are also structural: for example, BMI
+30–34.9 becomes an `all_of` containing separate `numeric_gte(30)` and `numeric_lte(34.9)` leaves.
+A required absence of “hemorrhage or dissection” becomes an `all_of` containing two positive-fact
+leaves with `negated: true`; it is not collapsed into one ambiguous fact.
+
+The implementation sequence is:
+
+1. The compiler model maps policy language into `all_of`, `any_of`, `n_of`, and atomic leaf nodes.
+2. Pydantic validates the complete recursive shape using the discriminated `Node` union. An unknown
+   node kind or malformed child cannot reach evaluation.
+3. Deterministic compiler checks reject known semantic collapses, including missing range bounds,
+   “with at least one” represented as one leaf, combined required absences, double negation, and
+   incorrectly negated upper-bounded timing.
+4. Chart extraction receives only the raw fields requested by the leaves. It is not shown the
+   Boolean operator or pass/fail threshold, so it cannot short-circuit the policy logic.
+5. `evaluate()` recursively evaluates every child of the selected branch and combines the child
+   statuses according to the node kind. The resulting full `EvalResult` tree is stored in
+   `BranchResult.tree`.
+6. Only after the root verdict exists does `decisive_findings()` derive the smaller explanation
+   shown by the UI. This projection cannot change the tree or verdict.
+
+The three Florida Blue baselines demonstrate the nested structures the code applies:
+
+```text
+Varicose-vein ablation (MET)
+ALL
+├── demonstrated saphenous reflux
+├── CEAP class >= C2
+├── varicosities >= 3 mm
+└── ONE OR MORE
+    ├── ulceration
+    ├── recurrent thrombophlebitis
+    ├── hemorrhage/recurrent bleeding
+    └── ALL
+        ├── persistent reflux-associated symptoms
+        ├── significant activities-of-daily-living interference
+        └── compression therapy >= 3 months without improvement
+
+Carotid stenting (NOT_MET)
+ALL
+├── stenosis between 50% and 99%
+├── qualifying recent focal cerebral ischemia
+└── anatomic contraindication to carotid endarterectomy  ← explicitly absent
+
+Intracranial mechanical thrombectomy (INSUFFICIENT_EVIDENCE)
+ALL
+├── qualifying proximal anterior-circulation occlusion
+├── EITHER
+│   ├── treatment within 12 hours
+│   └── ALL
+│       ├── treatment within 24 hours
+│       └── qualifying clinical/imaging mismatch
+├── substantial neurological deficit
+├── salvageable brain tissue  ← not documented
+└── ALL
+    ├── no intracranial hemorrhage
+    └── no arterial dissection
+```
+
+“Correctly identified” has a specific boundary here: the initial translation from policy prose to
+the tree is model extraction, while schema validation, known fidelity checks, routing, predicate
+comparisons, and Boolean evaluation are code. Given an accepted criteria tree and extracted facts,
+the verdict is deterministic and reproducible. The safeguards substantially reduce known mapping
+errors, but they cannot mathematically prove that the first policy extraction omitted no novel or
+unexpectedly worded criterion; that limitation is why the source quotes, cached tree, regression
+fixtures, and future human policy-tree approval remain important.
+
 Each branch can carry applicability metadata independent of its medical-necessity criteria:
 `procedure_codes`, `procedure_aliases`, `min_age`, `max_age`, and the legacy vascular
 `vein_types`. Routing scores exact CPT/HCPCS and vessel matches, procedure aliases, specific label
 tokens, and age bounds. A unique best match selects one branch. A tie returns the tied candidates;
-no match returns all branches. Both cases carry `ambiguous_route` rather than silently guessing.
+no match returns zero branches with `policy_not_applicable`. A mismatch is therefore distinguished
+from a clinical failure and does not trigger extraction against unrelated policy branches. A tied
+best score still carries `ambiguous_route` and evaluates only those tied candidates.
 
 ### Compiler safeguards
 
@@ -75,11 +163,13 @@ The compiler validates the full tree and makes up to three attempts. A retry is 
 1. Pydantic schema failure; or
 2. a deterministic fidelity check detecting one of the high-risk patterns currently covered:
    collapsed numeric ranges, collapsed “with at least one” logic, collapsed CPAP-adjustment
-   duration, or weakened strict inequalities.
+   duration, weakened strict inequalities, double-negated absence requirements, incorrectly
+   negated upper-bounded timing, or collapsed required absences such as “no X or Y.”
 
-When repairing a schema-valid tree, the compiler includes the previous tree and requires the known
-branch IDs to be preserved. The disk-cache key includes both the PDF bytes and compiler prompt, so a
-prompt change recompiles previously cached policies.
+When repairing a schema-valid tree, the compiler sends the previous tree and issues without
+resending the source policy, and requires known branch IDs to be preserved. The disk-cache key
+includes the PDF bytes, compiler prompt, and criteria-page selection version, so either behavior
+change recompiles previously cached policies.
 
 These safeguards detect known failure shapes; they do not prove that the initial extraction contains
 every policy branch or every criterion.
@@ -101,6 +191,12 @@ The legacy `found` field remains as a derived compatibility projection. This dis
 The extractor receives only field name, expected raw type, unit, and clinical concept. Thresholds,
 operators, and policy pass/fail language stay in code-owned evaluation.
 
+Guideline and chart quotes are resolved back to physical PDF pages by local code. Exact normalized
+matches are preferred; page markers let the model disambiguate repeated wording, but the selected
+page is accepted only when the quote actually occurs there. The source also carries the printed page
+and a best-effort section heading. The UI links verified citations to the uploaded PDF at that page;
+an unresolved location is labeled unverified and never changes the verdict.
+
 ### Deterministic evaluation and output
 
 The evaluator returns `MET`, `NOT_MET`, or `INSUFFICIENT_EVIDENCE` using three-valued logic:
@@ -115,10 +211,20 @@ The evaluator returns `MET`, `NOT_MET`, or `INSUFFICIENT_EVIDENCE` using three-v
 exists. It can result from absent evidence, conflicting evidence, an unparseable value, or an
 unmappable policy rule.
 
-The response retains the complete evaluation tree but separately computes `decisive_findings` for
-the UI. Passing OR/N-of alternatives are reduced to a sufficient witness, failed AND trees show the
-actual failures, and unresolved trees show the unresolved paths. This prevents irrelevant branches
-and unused alternatives from appearing as gaps.
+The response retains the complete evaluation tree in `evaluated_branches[].tree`. The UI currently
+renders `decisive_findings`, a projection computed only after the complete root tree has been
+evaluated:
+
+- a passing `all_of` retains all required children;
+- a passing `any_of`/EITHER retains one sufficient passing alternative;
+- a passing `n_of(k)` retains `k` sufficient passing alternatives;
+- a failing tree retains the paths that made the rule fail; and
+- an insufficient tree retains the unresolved paths that could still change the result.
+
+Therefore, the shorter UI list is an explanation of the full decision, not the input to it. Unused
+OR alternatives are hidden only after another alternative has already satisfied the parent rule.
+The evaluator tests explicitly cover ALL precedence, ANY/EITHER precedence, N-of reachability,
+nested pivotality, and explanation pruning in [test_evaluator.py](backend/tests/test_evaluator.py).
 
 ### Second-model verification
 
@@ -154,23 +260,30 @@ signal, not a second decision-maker.
 1. **Evidence phrased in an unexpected way.** The extractor can miss it, producing a false
    `NOT_DOCUMENTED` gap. Requested-field extraction and verbatim quotes make this reviewable, but do
    not eliminate extraction error.
-2. **Conflicting notes.** They now remain explicitly `CONFLICTING`, but the UI currently presents all
-   unresolved evidence similarly rather than giving each evidence state tailored workflow text.
-3. **A vague or absent order.** Routing evaluates tied candidates or all branches and flags the route;
-   the UI does not ask the user to resolve the procedure before evaluation.
-4. **Scanned/image-only PDFs or layout-dependent evidence.** Local `pypdf` extraction can lose tables,
-   reading order, handwriting, and page images. This is the primary reason to evaluate OpenAI PDF
-   file inputs next.
+2. **Conflicting notes.** They remain explicitly `CONFLICTING` and are labeled separately from
+   `NOT_DOCUMENTED` and `EXPLICITLY_ABSENT` in the UI, but still require human resolution.
+3. **A vague or absent order.** A zero-score route now stops as `policy_not_applicable`; an equal
+   best-score tie evaluates only the tied candidates and remains flagged for review.
+4. **Scanned/image-only PDFs or layout-dependent evidence.** Preflight rejects a fully unreadable
+   text layer and warns about partial coverage, but local `pypdf` can still lose tables, reading
+   order, handwriting, and page images. OCR or vision remains future work.
 5. **Malformed provider output or transport failures.** Fact-level validation degrades malformed
    individual facts to not documented. Compiler schema/fidelity failures retry up to three times.
-   JSON-decoding, provider, and unexpected pipeline failures surface as HTTP 502 responses; there is
-   no provider retry/backoff policy yet.
+   JSON-decoding, provider, and unexpected pipeline failures surface as HTTP 502 responses on the
+   compatibility endpoint or typed error events on the streaming endpoint. There is no provider
+   retry/backoff policy yet.
 
 ## Current validation and known operational limits
 
-- The backend suite has 67 deterministic tests covering schemas, routing, evidence states,
-  predicates, pivotality, compiler retries, verification, caching, and the pipeline. The frontend
-  production build passes.
+- The backend suite has 80 deterministic tests covering schemas, routing, evidence states,
+  predicates, pivotality, compiler retries, criteria-page selection, streaming progress,
+  verification, caching, and the pipeline. The frontend production build passes.
+- The evaluation UI receives newline-delimited progress events for document preflight, cache use,
+  criteria-page selection, compiler attempts, order extraction, routing, branch extraction,
+  verification, and completion.
+- Live Florida Blue regression results are: varicose-vein ablation `MET`, carotid stenting
+  `NOT_MET`, intracranial thrombectomy `INSUFFICIENT_EVIDENCE`, and a pacemaker/vein-policy
+  mismatch `policy_not_applicable` with zero evaluated branches.
 - Live regression results for the supplied advanced cases are: adult bariatric surgery `MET`, PVC
   ablation `NOT_MET`, and UPPP `INSUFFICIENT_EVIDENCE` with CPAP-adjustment duration and fiberoptic
   endoscopy as the two decisive unresolved items.

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { evaluate, type RunResult } from "./api";
+import { evaluate, type EvaluationProgress, type RunResult } from "./api";
 import { UploadPanel } from "./components/UploadPanel";
 import { ResultView } from "./components/ResultView";
 
@@ -23,14 +23,16 @@ export function App() {
   const [result, setResult] = useState<RunResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<EvaluationProgress | null>(null);
 
   async function submit() {
     if (!guideline || !chart) return;
     setLoading(true);
     setError(null);
     setResult(null);
+    setProgress({ stage: "upload", message: "Uploading both PDFs", elapsed_seconds: 0 });
     try {
-      setResult(await evaluate(guideline, chart));
+      setResult(await evaluate(guideline, chart, setProgress));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -41,6 +43,7 @@ export function App() {
   function reset() {
     setResult(null);
     setError(null);
+    setProgress(null);
     setGuideline(null);
     setChart(null);
   }
@@ -49,12 +52,18 @@ export function App() {
     <div className="min-h-full">
       <Header />
       {result ? (
-        <ResultView result={result} onReset={reset} />
+        <ResultView
+          result={result}
+          guidelineFile={guideline}
+          chartFile={chart}
+          onReset={reset}
+        />
       ) : (
         <UploadPanel
           guideline={guideline}
           chart={chart}
           loading={loading}
+          progress={progress}
           error={error}
           onGuideline={setGuideline}
           onChart={setChart}
