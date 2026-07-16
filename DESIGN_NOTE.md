@@ -1,93 +1,182 @@
 # Design Note — Medical Necessity Checker
 
-*The build-case ask: where the judgment lives (what is data, what is code), and what breaks
-first under a guideline change or a messy chart.*
+*Where judgment lives, what is implemented today, and what is most likely to fail when a
+guideline or chart changes.*
 
-## Where the judgment lives
+## Current design boundary
 
-**No LLM makes the medical-necessity decision.** The decision is made by a deterministic,
-guideline-agnostic rule engine ([evaluator.py](backend/app/evaluator.py)) walking a structured
-criteria tree against structured patient facts. LLMs are confined to two bounded
-extraction jobs, and everything they produce is data that the code judges:
+**No LLM produces the medical-necessity verdict.** LLMs are used to extract structured data at
+four boundaries: policy criteria, the ordered procedure, chart facts, and an optional second-model
+fact check. The verdict is produced by a deterministic, guideline-agnostic evaluator after those
+extractions.
 
-| Artifact | Data or Code | Produced by | Lives in |
+| Artifact or operation | Data or code | Produced by | Implementation |
 |---|---|---|---|
-| **Criteria tree** — the guideline's rules as an AND/OR/N-of tree of atomic predicates | Data (per guideline, cached on disk) | GPT-4o, once per guideline+prompt version | [compiler.py](backend/app/compiler.py) |
-| **Patient facts** — atomic findings, each with a chart quote and confidence | Data (per chart) | GPT-4o, guided by the selected branch's predicates | [extractor.py](backend/app/extractor.py) |
-| **The verdict** — three-valued Kleene evaluation, gap list, pivotality | **Code** (pure, deterministic, no LLM) | — | [evaluator.py](backend/app/evaluator.py) |
-| Branch routing (which procedure's criteria apply) | Code over an LLM-extracted order | order: GPT-4o; selection: code | [router.py](backend/app/router.py) |
-| Cross-model verification of shaky, verdict-swinging facts | Code decides *when*; Mistral re-extracts | [verifier.py](backend/app/verifier.py) |
-| CEAP ordering, vein synonyms, measurement normalization | Data (authored, in repo) | — | [reference.py](backend/app/reference.py) |
+| Criteria tree — policy rules represented as AND/OR/N-of nodes and atomic predicates | Data, cached per guideline PDF and compiler-prompt version | OpenAI primary model | [compiler.py](backend/app/compiler.py) |
+| Ordered procedure — modality, vessel, CPT, description, and patient age | Data, per chart | OpenAI primary model | [router.py](backend/app/router.py) |
+| Applicable branch selection | **Code**, deterministic scoring | — | [router.py](backend/app/router.py) |
+| Patient facts — raw values/findings, evidence state, quote, and confidence | Data, per selected branch and chart | OpenAI primary model | [extractor.py](backend/app/extractor.py) |
+| Medical-necessity verdict and decisive findings | **Code**, deterministic tree evaluation | — | [evaluator.py](backend/app/evaluator.py) |
+| Pivotal-fact selection and independent re-extraction | Code selects; Mistral re-extracts | Mistral verifier model | [verifier.py](backend/app/verifier.py) |
+| CEAP ordering, vein synonyms, and basic measurement parsing | Authored reference data/code | — | [reference.py](backend/app/reference.py) |
 
-The hard boundary is a **closed predicate vocabulary** (`boolean`, `numeric_gte/lte`,
-`ordinal_gte`, `duration_gte`, `existence`, plus a `negated` wrapper). The compiler must
-express any guideline using only these; when it can't, it must emit an explicit
-`unmappable` node rather than invent semantics. Against the real BCBS FL policy, the
-"experimental/investigational" tributary techniques and cosmetic telangiectasia sections
-correctly compiled to flagged `unmappable` nodes, not hallucinated criteria.
+The important guarantee is narrower than “the entire run is deterministic”: once the criteria tree
+and patient facts exist, the same inputs produce the same verdict. Cold LLM extraction can still
+vary, and cached criteria trees preserve the first accepted policy extraction.
 
-Three verdict states, not two: `MET`, `NOT_MET`, and `INSUFFICIENT_EVIDENCE`. The
-distinction is the product: *insufficient* means "the evidence probably exists — go attach
-the duplex report" (fixable before submission); *not met* means "the patient genuinely
-fails this criterion — don't submit yet." Every leaf carries a guideline quote and a chart
-quote (or `NOT FOUND IN CHART`), so every line of the gap list is traceable in both
-directions.
+## Implemented pipeline
 
-The two API keys are used asymmetrically on purpose: OpenAI is the primary extractor;
-Mistral is an **independent verifier** invoked only on leaves that are (a) weakly
-evidenced (missing, or confidence < 0.75) and (b) *pivotal* — forcing them MET vs NOT_MET
-changes the root verdict (computed by the engine, not guessed). Cross-model agreement
-raises confidence; disagreement flags the field for human review in the UI. Deliberate
-design choice: agreement boosts confidence even when both models were individually unsure —
-the agreement itself is the signal.
+```text
+Guideline PDF ──pypdf──> text ──OpenAI──> criteria tree ──schema/fidelity checks──> disk cache
+                                                                  │
+Chart PDF ──────pypdf──> text ──OpenAI──> order ──deterministic routing──> branch(es)
+                                                                  │
+                                      OpenAI extracts requested raw facts only
+                                                                  │
+                                   deterministic three-valued evaluation
+                                                                  │
+                          Mistral re-extracts weak, pivotal facts when needed
+                                                                  │
+                               verdict + decisive findings + review flags
+```
+
+PDFs are currently converted to text locally with `pypdf`. The application does **not** yet send
+PDFs as OpenAI file inputs, and it uses Chat Completions JSON mode rather than strict Structured
+Outputs. Migrating that input/schema boundary is the next planned step; it does not change the
+deterministic evaluator boundary.
+
+### Policy representation
+
+The criteria tree uses structural node kinds `all_of`, `any_of`, `n_of`, `leaf`, and `unmappable`.
+A discriminated Pydantic union rejects malformed node kinds before evaluation.
+
+The closed leaf-predicate vocabulary is:
+
+- `boolean`
+- `numeric_gt`, `numeric_gte`, `numeric_lt`, `numeric_lte`
+- `ordinal_gte`
+- `duration_gte`
+- `existence`
+
+Negation is represented by `negated: true` on a leaf. Policy comparisons remain in the criteria
+tree; they are deliberately excluded from chart-extraction requests so the LLM returns a raw value
+such as `33.3`, not a policy conclusion such as `false`.
+
+Each branch can carry applicability metadata independent of its medical-necessity criteria:
+`procedure_codes`, `procedure_aliases`, `min_age`, `max_age`, and the legacy vascular
+`vein_types`. Routing scores exact CPT/HCPCS and vessel matches, procedure aliases, specific label
+tokens, and age bounds. A unique best match selects one branch. A tie returns the tied candidates;
+no match returns all branches. Both cases carry `ambiguous_route` rather than silently guessing.
+
+### Compiler safeguards
+
+The compiler validates the full tree and makes up to three attempts. A retry is triggered by either:
+
+1. Pydantic schema failure; or
+2. a deterministic fidelity check detecting one of the high-risk patterns currently covered:
+   collapsed numeric ranges, collapsed “with at least one” logic, collapsed CPAP-adjustment
+   duration, or weakened strict inequalities.
+
+When repairing a schema-valid tree, the compiler includes the previous tree and requires the known
+branch IDs to be preserved. The disk-cache key includes both the PDF bytes and compiler prompt, so a
+prompt change recompiles previously cached policies.
+
+These safeguards detect known failure shapes; they do not prove that the initial extraction contains
+every policy branch or every criterion.
+
+### Evidence representation
+
+Patient evidence is not reduced to `found: true/false`. Each fact has one of four states:
+
+| Evidence state | Meaning | Evaluation behavior |
+|---|---|---|
+| `DOCUMENTED` | The chart contains an assessed value or affirmative finding | Apply the deterministic predicate |
+| `EXPLICITLY_ABSENT` | The chart explicitly denies an assessed finding | Treat as a documented negative; negated policy leaves can therefore pass |
+| `NOT_DOCUMENTED` | The chart omits the fact or says the report/result is unavailable, pending, or unknown | `INSUFFICIENT_EVIDENCE` |
+| `CONFLICTING` | Chart statements disagree and cannot be resolved | `INSUFFICIENT_EVIDENCE` |
+
+The legacy `found` field remains as a derived compatibility projection. This distinction prevents
+“no endoscopy report is included” from being treated as clinical proof that narrowing is absent.
+
+The extractor receives only field name, expected raw type, unit, and clinical concept. Thresholds,
+operators, and policy pass/fail language stay in code-owned evaluation.
+
+### Deterministic evaluation and output
+
+The evaluator returns `MET`, `NOT_MET`, or `INSUFFICIENT_EVIDENCE` using three-valued logic:
+
+- `all_of`: any `NOT_MET` wins; otherwise unresolved evidence wins; otherwise `MET`.
+- `any_of`: any `MET` wins; otherwise unresolved evidence wins; otherwise `NOT_MET`.
+- `n_of(k)`: `MET` when at least `k` children pass; `NOT_MET` when even all unresolved children
+  could not reach `k`; otherwise `INSUFFICIENT_EVIDENCE`.
+- `unmappable`: always `INSUFFICIENT_EVIDENCE` with an `unmappable` flag.
+
+`INSUFFICIENT_EVIDENCE` means the decision is unresolved, not necessarily that a missing document
+exists. It can result from absent evidence, conflicting evidence, an unparseable value, or an
+unmappable policy rule.
+
+The response retains the complete evaluation tree but separately computes `decisive_findings` for
+the UI. Passing OR/N-of alternatives are reduced to a sufficient witness, failed AND trees show the
+actual failures, and unresolved trees show the unresolved paths. This prevents irrelevant branches
+and unused alternatives from appearing as gaps.
+
+### Second-model verification
+
+Code selects leaves that are both weakly evidenced (missing or below the confidence threshold) and
+structurally capable of changing the root verdict. Mistral independently re-extracts only those raw
+facts. Agreement raises confidence. A value, presence, ordinal, or evidence-state disagreement:
+
+- keeps the primary extractor's value;
+- lowers its confidence; and
+- adds `verifier_disagreement` for human review.
+
+The verifier does **not** currently override facts or change the verdict. This makes it a review
+signal, not a second decision-maker.
 
 ## What breaks first under a guideline change
 
-1. **Rules outside the predicate vocabulary.** A guideline requiring cross-visit temporal
-   logic ("two ulcer recurrences within 12 months") or inter-branch conditions won't fit
-   the vocabulary; the compiler emits `unmappable` and the branch evaluates
-   `INSUFFICIENT` with a visible flag. Failure mode is *loud and conservative*, not a
-   wrong MET.
-2. **Compiler fidelity on compound sentences.** Our first live run against the real BCBS
-   policy collapsed "demonstrated saphenous reflux AND CEAP ≥ C2" into a single
-   CEAP-only leaf — the missing duplex report then had no leaf to fail. We fixed the
-   prompt (one leaf per ANDed clause) and, importantly, made the guideline cache key
-   include the compiler prompt, so prompt fixes automatically recompile cached
-   guidelines. This class of bug — a rule silently under-split — is the most likely
-   residual failure on an unseen guideline; the mitigation is `parse_confidence` flags
-   plus the per-leaf guideline citations, which make a mis-parse auditable in the UI.
-3. **Non-vascular guidelines.** Routing is anatomy-based (`vein_types` per branch) because
-   this guideline branches by vessel. A knee-replacement policy would compile but route
-   every chart to "ambiguous → evaluate all branches." Honest limitation of the MVP scope;
-   the fix is a generic `applies_to` concept on branches.
-4. **CEAP ordering is authored data.** A payer inventing a new classification system would
-   need a new ordinal table in `reference.py`; unknown classes degrade to `INSUFFICIENT`,
-   never a silent comparison.
+1. **An omitted branch or criterion in the initial policy extraction.** Current checks can ensure a
+   repair does not drop known branches, but there is no independent branch inventory against which
+   to test the first tree. The intended fix is a small policy-index pass followed by per-branch
+   compilation.
+2. **Rules outside the predicate vocabulary.** Cross-visit event counting, unit conversion, complex
+   temporal logic, or inter-branch dependencies become `unmappable` and therefore unresolved.
+3. **Unsupported coverage disposition.** “Experimental,” “investigational,” and categorically
+   non-covered language has no dedicated deterministic node/status yet. Mapping it to `unmappable`
+   is conservative, but it produces `INSUFFICIENT_EVIDENCE` rather than a coverage denial.
+4. **Compound language outside the current fidelity patterns.** The compiler checks several known
+   collapse modes, but a differently worded conjunction could still be accepted as one leaf.
+5. **New ordinal systems or units.** CEAP ordering is authored locally, and measurement parsing does
+   not perform general unit conversion. Unknown values degrade to unresolved evidence.
 
 ## What breaks first under a messy chart
 
-1. **Evidence present but phrased oddly** → the extractor misses it → the leaf lands
-   `INSUFFICIENT` (safe direction: staff re-check a false gap; the payer never sees a
-   false MET). Guided extraction — asking only for the selected branch's fields, with the
-   requirement to quote the chart verbatim — is what keeps the extractor from wandering.
-2. **Explicitly denied findings.** "No active or healed ulceration" must be `NOT_MET`, not
-   MET-because-mentioned. Our first live run had exactly this bug (an `existence` leaf
-   scored MET on `found=true, value=false`), and it silently corrupted the `n_of(1)`
-   indications gate *and* starved the verifier (nothing looked pivotal). Fixed and
-   regression-tested; the extractor prompt now distinguishes denied
-   (`found=true, value=false`) from unaddressed (`found=false`).
-3. **Vague or missing orders** → the router falls back to evaluating every branch and
-   flags `ambiguous_route` rather than guessing.
-4. **Malformed LLM output** (truncated JSON, wrong types, missing fields) → per-fact
-   defensive parsing degrades that field to `INSUFFICIENT`; API surfaces 502 with the
-   validation detail rather than mislabeling it a client error.
+1. **Evidence phrased in an unexpected way.** The extractor can miss it, producing a false
+   `NOT_DOCUMENTED` gap. Requested-field extraction and verbatim quotes make this reviewable, but do
+   not eliminate extraction error.
+2. **Conflicting notes.** They now remain explicitly `CONFLICTING`, but the UI currently presents all
+   unresolved evidence similarly rather than giving each evidence state tailored workflow text.
+3. **A vague or absent order.** Routing evaluates tied candidates or all branches and flags the route;
+   the UI does not ask the user to resolve the procedure before evaluation.
+4. **Scanned/image-only PDFs or layout-dependent evidence.** Local `pypdf` extraction can lose tables,
+   reading order, handwriting, and page images. This is the primary reason to evaluate OpenAI PDF
+   file inputs next.
+5. **Malformed provider output or transport failures.** Fact-level validation degrades malformed
+   individual facts to not documented. Compiler schema/fidelity failures retry up to three times.
+   JSON-decoding, provider, and unexpected pipeline failures surface as HTTP 502 responses; there is
+   no provider retry/backoff policy yet.
 
-## Known limits (deliberate, half-day scope)
+## Current validation and known operational limits
 
-- No retry/backoff on LLM calls — a provider timeout fails the request cleanly.
-- The verifier-disagreement UI path is tested with mocks but was never triggered in live
-  runs (both models agreed on our synthetic charts) — the honest status of that feature.
-- Guideline compile is ~20–25s cold, then cached; per-chart evaluation ~5s.
-- Verdicts depend on extraction quality; every output is designed to be *checked*, not
-  blindly trusted — citations both ways, confidence flags, and the MET / NOT_MET /
-  INSUFFICIENT split exist so a human can audit any line in seconds.
+- The backend suite has 67 deterministic tests covering schemas, routing, evidence states,
+  predicates, pivotality, compiler retries, verification, caching, and the pipeline. The frontend
+  production build passes.
+- Live regression results for the supplied advanced cases are: adult bariatric surgery `MET`, PVC
+  ablation `NOT_MET`, and UPPP `INSUFFICIENT_EVIDENCE` with CPAP-adjustment duration and fiberoptic
+  endoscopy as the two decisive unresolved items.
+- Live verification currently depends on the pinned Mistral SDK (`mistralai>=1,<2`). The local
+  development environment used for the advanced PDF regression had a newer incompatible SDK, so
+  those live verdict checks ran without the Mistral review step. The verifier is covered by mocked
+  tests and cannot change a verdict in the current design.
+- There is no persistence for runs, human policy-tree approval, PHI/security hardening,
+  multi-guideline reconciliation, appeals drafting, or EHR integration.
