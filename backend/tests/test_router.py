@@ -32,3 +32,49 @@ def test_select_branch_ambiguous_falls_back_to_all():
     branches, flag = select_branch(Order(vein=None), TREE)
     assert len(branches) == 2
     assert flag == "ambiguous_route"
+
+
+def test_select_branch_uses_procedure_code_and_age_applicability():
+    tree = CriteriaTree.model_validate({
+        "guideline_id": "g", "title": "Bariatric", "branches": [
+            {
+                "branch_id": "adult", "procedure_codes": ["43775"], "min_age": 18,
+                "procedure_label": "Adult sleeve gastrectomy",
+                "root": {"kind": "leaf", "id": "a", "predicate": "existence",
+                         "field": "x", "human_readable": "x"},
+            },
+            {
+                "branch_id": "pediatric", "procedure_codes": ["43775"], "max_age": 17,
+                "procedure_label": "Pediatric sleeve gastrectomy",
+                "root": {"kind": "leaf", "id": "p", "predicate": "existence",
+                         "field": "x", "human_readable": "x"},
+            },
+        ],
+    })
+    branches, flag = select_branch(Order(cpt="43775", patient_age=44), tree)
+    assert [branch.branch_id for branch in branches] == ["adult"]
+    assert flag is None
+
+
+def test_select_branch_uses_generic_procedure_alias():
+    tree = CriteriaTree.model_validate({
+        "guideline_id": "g", "title": "OSA", "branches": [
+            {
+                "branch_id": "uppp", "procedure_aliases": ["uvulopalatopharyngoplasty"],
+                "procedure_label": "Uvulopalatopharyngoplasty (UPPP)",
+                "root": {"kind": "leaf", "id": "u", "predicate": "existence",
+                         "field": "x", "human_readable": "x"},
+            },
+            {
+                "branch_id": "jaw", "procedure_aliases": ["maxillomandibular advancement"],
+                "procedure_label": "Jaw realignment surgery",
+                "root": {"kind": "leaf", "id": "j", "predicate": "existence",
+                         "field": "x", "human_readable": "x"},
+            },
+        ],
+    })
+    branches, flag = select_branch(
+        Order(raw="Uvulopalatopharyngoplasty as sole procedure", cpt="42145"), tree
+    )
+    assert [branch.branch_id for branch in branches] == ["uppp"]
+    assert flag is None

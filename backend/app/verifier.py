@@ -5,7 +5,7 @@ from pydantic import ValidationError
 from .llm import LLM
 from .models import Node, LeafNode, UnmappableNode, Fact
 from .evaluator import pivotal_leaf_ids
-from .extractor import EXTRACTOR_SYSTEM
+from .extractor import EXTRACTOR_SYSTEM, field_spec
 from .reference import parse_measurement, compare_ordinal
 
 
@@ -64,11 +64,12 @@ def verify_facts(chart_text: str, root: Node, facts: dict[str, Fact],
                   leaf_ids: list[str], verifier: LLM) -> tuple[dict[str, Fact], dict[str, str]]:
     leaves = _leaf_by_id(root)
     fields = []
+    predicates: dict[str, str] = {}
     for lid in leaf_ids:
         leaf = leaves.get(lid)
         if leaf:
-            fields.append({"field": leaf.field, "predicate": leaf.predicate.value,
-                           "human_readable": leaf.human_readable, "threshold": leaf.threshold})
+            fields.append(field_spec(leaf))
+            predicates.setdefault(leaf.field, leaf.predicate.value)
     if not fields:
         return facts, {}
     user = (f"CHART:\n{chart_text}\n\nIndependently determine these fields:\n"
@@ -93,7 +94,12 @@ def verify_facts(chart_text: str, root: Node, facts: dict[str, Fact],
             continue
         orig_found = bool(orig and orig.found)
         orig_val = orig.value if orig else None
-        if vf.found != orig_found or not _values_agree_for(f["predicate"], vf.value, orig_val):
+        state_disagrees = orig is not None and vf.state != orig.state
+        if (
+            state_disagrees
+            or vf.found != orig_found
+            or not _values_agree_for(predicates[field], vf.value, orig_val)
+        ):
             flags[field] = "verifier_disagreement"
             # keep original value but drop confidence to force human review
             if orig:
