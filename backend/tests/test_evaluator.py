@@ -1,0 +1,82 @@
+from app.models import (
+    Status, PredicateType, LeafNode, AllOf, AnyOf, NOf, Fact,
+)
+from app.evaluator import evaluate, pivotal_leaf_ids
+
+
+def leaf(id, pred, field, threshold=None, negated=False):
+    return LeafNode(id=id, predicate=pred, field=field, threshold=threshold,
+                    negated=negated, human_readable=id)
+
+
+def fact(field, value=None, found=True):
+    return Fact(field=field, value=value, found=found)
+
+
+def facts(*fs):
+    return {f.field: f for f in fs}
+
+
+def test_leaf_met_not_met_insufficient():
+    l = leaf("d", PredicateType.NUMERIC_GTE, "vein_diameter_mm", 3)
+    assert evaluate(l, facts(fact("vein_diameter_mm", 4))).status == Status.MET
+    assert evaluate(l, facts(fact("vein_diameter_mm", 2))).status == Status.NOT_MET
+    assert evaluate(l, {}).status == Status.INSUFFICIENT
+
+
+def test_ordinal_leaf():
+    l = leaf("c", PredicateType.ORDINAL_GTE, "ceap_class", "C2")
+    assert evaluate(l, facts(fact("ceap_class", "C3"))).status == Status.MET
+    assert evaluate(l, facts(fact("ceap_class", "C1"))).status == Status.NOT_MET
+
+
+def test_negated_leaf():
+    l = leaf("dvt", PredicateType.BOOLEAN, "insufficiency_secondary_to_dvt",
+             threshold=True, negated=True)
+    assert evaluate(l, facts(fact("insufficiency_secondary_to_dvt", True))).status == Status.NOT_MET
+    assert evaluate(l, facts(fact("insufficiency_secondary_to_dvt", False))).status == Status.MET
+
+
+def test_all_of_precedence():
+    node = AllOf(id="r", children=[
+        leaf("a", PredicateType.BOOLEAN, "a", True),
+        leaf("b", PredicateType.BOOLEAN, "b", True),
+    ])
+    assert evaluate(node, facts(fact("a", True), fact("b", True))).status == Status.MET
+    assert evaluate(node, facts(fact("a", True), fact("b", False))).status == Status.NOT_MET
+    assert evaluate(node, facts(fact("a", True))).status == Status.INSUFFICIENT  # b missing
+
+
+def test_any_of_precedence():
+    node = AnyOf(id="r", children=[
+        leaf("a", PredicateType.BOOLEAN, "a", True),
+        leaf("b", PredicateType.BOOLEAN, "b", True),
+    ])
+    assert evaluate(node, facts(fact("a", True))).status == Status.MET
+    assert evaluate(node, facts(fact("a", False), fact("b", False))).status == Status.NOT_MET
+    assert evaluate(node, {}).status == Status.INSUFFICIENT
+
+
+def test_n_of_unreachable_is_not_met():
+    node = NOf(id="r", k=2, children=[
+        leaf("a", PredicateType.BOOLEAN, "a", True),
+        leaf("b", PredicateType.BOOLEAN, "b", True),
+        leaf("c", PredicateType.BOOLEAN, "c", True),
+    ])
+    # one MET, two NOT_MET → can't reach 2 → NOT_MET
+    assert evaluate(node, facts(fact("a", True), fact("b", False), fact("c", False))).status == Status.NOT_MET
+    # one MET, one missing → 1 MET + 1 INSUFFICIENT >= 2 possible → INSUFFICIENT
+    assert evaluate(node, facts(fact("a", True), fact("b", False))).status == Status.INSUFFICIENT
+    # two MET → MET
+    assert evaluate(node, facts(fact("a", True), fact("b", True))).status == Status.MET
+
+
+def test_pivotal_leaf_detection():
+    # root = all_of(a, b); a is MET, b is missing → b is pivotal, a is not.
+    node = AllOf(id="r", children=[
+        leaf("a", PredicateType.BOOLEAN, "a", True),
+        leaf("b", PredicateType.BOOLEAN, "b", True),
+    ])
+    ids = pivotal_leaf_ids(node, facts(fact("a", True)))
+    assert "b" in ids
+    assert "a" not in ids
