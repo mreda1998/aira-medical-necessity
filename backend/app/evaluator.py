@@ -111,14 +111,15 @@ def _collect_leaves(node: Node) -> list[LeafNode]:
     return leaves
 
 
-def pivotal_leaf_ids(root: Node, facts: dict[str, Fact]) -> list[str]:
+def pivotal_leaf_ids(root: Node, facts: dict[str, Fact],
+                      low_conf_threshold: float = 0.6) -> list[str]:
     """Leaves with weak evidence (missing or low-confidence) that are
     structurally able to move the root verdict — the re-extraction set."""
     pivotal = []
     for leaf in _collect_leaves(root):
         leaf_status = _eval_leaf(leaf, facts).status
         ev = facts.get(leaf.field)
-        low_conf = ev is not None and ev.found and ev.confidence < 0.6
+        low_conf = ev is not None and ev.found and ev.confidence < low_conf_threshold
         if leaf_status != Status.INSUFFICIENT and not low_conf:
             continue  # solid evidence — re-extraction is pointless
         forced_met = evaluate(root, facts, {leaf.id: Status.MET}).status

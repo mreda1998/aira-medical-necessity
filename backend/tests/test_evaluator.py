@@ -120,3 +120,17 @@ def test_pivotal_includes_low_confidence_found_fact():
     fs = facts(fact("a", True), fact("b", True))
     fs["b"].confidence = 0.4  # found but shaky
     assert pivotal_leaf_ids(node, fs) == ["b"]
+
+
+def test_pivotal_leaf_ids_custom_threshold_widens_low_conf_band():
+    # b found at confidence 0.7: default (0.6) threshold treats it as solid
+    # evidence and excludes it; a wider 0.75 threshold (as used by the
+    # verifier) includes it since it still swings the all_of verdict.
+    node = AllOf(id="r", children=[
+        leaf("a", PredicateType.BOOLEAN, "a", True),
+        leaf("b", PredicateType.BOOLEAN, "b", True),
+    ])
+    fs = facts(fact("a", True), fact("b", True))
+    fs["b"].confidence = 0.7
+    assert pivotal_leaf_ids(node, fs) == []
+    assert pivotal_leaf_ids(node, fs, low_conf_threshold=0.75) == ["b"]
