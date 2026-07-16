@@ -122,6 +122,16 @@ def test_pivotal_includes_low_confidence_found_fact():
     assert pivotal_leaf_ids(node, fs) == ["b"]
 
 
+def test_existence_explicit_negation_is_not_met():
+    l = leaf("u", PredicateType.EXISTENCE, "ulcer")
+    assert evaluate(l, facts(fact("ulcer", False))).status == Status.NOT_MET
+    assert evaluate(l, facts(fact("ulcer", "no"))).status == Status.NOT_MET
+    assert evaluate(l, facts(fact("ulcer", "denied"))).status == Status.NOT_MET
+    assert evaluate(l, facts(fact("ulcer", True))).status == Status.MET
+    assert evaluate(l, facts(fact("ulcer", None))).status == Status.MET  # documented mention, no bool
+    assert evaluate(l, {}).status == Status.INSUFFICIENT
+
+
 def test_pivotal_leaf_ids_custom_threshold_widens_low_conf_band():
     # b found at confidence 0.7: default (0.6) threshold treats it as solid
     # evidence and excludes it; a wider 0.75 threshold (as used by the

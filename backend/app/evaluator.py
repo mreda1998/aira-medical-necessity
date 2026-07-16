@@ -7,11 +7,29 @@ from .models import (
 from .reference import compare_ordinal, parse_measurement
 
 
+_FALSY_STRINGS = {"false", "no", "absent", "denied", "none", "negative"}
+
+
+def _is_explicit_negation(value) -> bool:
+    """True when an extracted value explicitly denies the finding, as opposed
+    to simply being unset. Covers real booleans and the string-y falsy values
+    LLM extractors sometimes emit (e.g. "no", "denied", "absent")."""
+    if value is False:
+        return True
+    if isinstance(value, str) and value.strip().lower() in _FALSY_STRINGS:
+        return True
+    return False
+
+
 def _apply_predicate(leaf: LeafNode, f: Fact) -> Status:
     p = leaf.predicate
     v = f.value
     if p == PredicateType.EXISTENCE:
-        return Status.MET  # found is already true when we reach here
+        # found=True with an explicitly falsy value means the chart addresses
+        # the finding and denies it — that is NOT_MET, not MET.
+        if _is_explicit_negation(v):
+            return Status.NOT_MET
+        return Status.MET  # documented present (value True or unvalued mention)
     if p == PredicateType.BOOLEAN:
         want = leaf.threshold if leaf.threshold is not None else True
         return Status.MET if bool(v) == bool(want) else Status.NOT_MET

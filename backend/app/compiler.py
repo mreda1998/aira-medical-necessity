@@ -32,6 +32,13 @@ Rules:
   reason. NEVER invent a predicate type.
 - Every leaf must include a source_span quoting the guideline text it came from and a
   parse_confidence in [0,1].
+- When a single criterion sentence contains multiple ANDed clauses about different clinical
+  facts (e.g. "There is demonstrated saphenous reflux AND CEAP class C2 or greater"), emit
+  one leaf PER clause under an all_of — never collapse them into one leaf. A reflux
+  requirement is its own boolean leaf (e.g. field "saphenous_reflux_demonstrated");
+  a CEAP classification is its own ordinal_gte leaf (field "ceap_class").
+- Every distinct evidentiary requirement in the guideline must map to its own leaf so a
+  chart missing that specific evidence produces a visible gap.
 """
 
 
@@ -42,7 +49,10 @@ def compile_guideline(text: str, llm: LLM) -> CriteriaTree:
 
 
 def compile_cached(data: bytes, llm: LLM) -> CriteriaTree:
-    h = store.content_hash(data)
+    # Key on both the PDF bytes and the compiler prompt: a prompt change (e.g.
+    # a fidelity fix like the ANDed-clause-splitting rule above) must bust the
+    # cache for guidelines that were already compiled under the old prompt.
+    h = store.content_hash(data + COMPILER_SYSTEM.encode("utf-8"))
     cached = store.load_tree(h)
     if cached is not None:
         return cached

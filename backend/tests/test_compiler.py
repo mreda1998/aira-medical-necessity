@@ -26,3 +26,34 @@ def test_compile_guideline_validates_tree():
     # prompt actually included the guideline text
     assert "some guideline text" in fake.calls[0]["user"]
     assert "closed" in COMPILER_SYSTEM.lower()  # instructs the closed predicate vocabulary
+
+
+def test_compile_cached_recompiles_when_prompt_changes(tmp_path, monkeypatch):
+    # The disk cache used to be keyed on PDF content alone, so a prompt fix
+    # (like the ANDed-clause-splitting rule) would never reach guidelines
+    # that were already cached under the old prompt. compile_cached must fold
+    # COMPILER_SYSTEM into the cache key so a prompt change busts the cache.
+    import app.store, app.compiler, importlib
+    monkeypatch.setenv("CACHE_DIR", str(tmp_path))
+    importlib.reload(app.store)
+    importlib.reload(app.compiler)
+    monkeypatch.setattr(app.compiler, "extract_text", lambda b: "guideline text")
+    try:
+        fake = FakeLLM([TREE_JSON, TREE_JSON])
+        data = b"same-pdf-bytes"
+
+        app.compiler.compile_cached(data, fake)
+        assert len(fake.calls) == 1
+
+        # same bytes, same prompt -> cache hit, no new LLM call
+        app.compiler.compile_cached(data, fake)
+        assert len(fake.calls) == 1
+
+        # prompt changes -> cache key changes -> recompiles (2nd LLM call)
+        monkeypatch.setattr(app.compiler, "COMPILER_SYSTEM", "a different system prompt")
+        app.compiler.compile_cached(data, fake)
+        assert len(fake.calls) == 2
+    finally:
+        monkeypatch.undo()
+        importlib.reload(app.store)
+        importlib.reload(app.compiler)
