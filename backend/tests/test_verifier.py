@@ -64,6 +64,31 @@ def test_values_agree_normalizes_formats():
     assert not _values_agree(None, 5)
 
 
+def test_values_agree_for_ordinal_distinguishes_ceap_subclasses():
+    from app.verifier import _values_agree_for
+    assert not _values_agree_for("ordinal_gte", "C4A", "C4B")
+    assert not _values_agree_for("ordinal_gte", "C2", "C2R")
+    assert _values_agree_for("ordinal_gte", "C4A", "c4a")
+    assert _values_agree_for("ordinal_gte", None, None)
+    assert not _values_agree_for("ordinal_gte", None, "C4A")
+    # non-ordinal predicates unchanged
+    assert _values_agree_for("numeric_gte", 5, "5 mm")
+
+
+def test_verify_flags_ordinal_subclass_disagreement():
+    root = AllOf(id="r", children=[
+        LeafNode(id="c", predicate=PredicateType.ORDINAL_GTE, field="ceap_class",
+                 threshold="C4B", human_readable="ceap"),
+    ])
+    facts = {"ceap_class": Fact(field="ceap_class", value="C4A", found=True, confidence=0.5)}
+    verifier = FakeLLM([{"facts": [
+        {"field": "ceap_class", "value": "C4B", "found": True, "confidence": 0.8},
+    ]}])
+    updated, flags = verify_facts("chart", root, facts, ["c"], verifier)
+    assert flags["ceap_class"] == "verifier_disagreement"
+    assert updated["ceap_class"].confidence <= 0.3
+
+
 def test_verify_does_not_mutate_input_facts():
     facts = {
         "fa": Fact(field="fa", value=True, found=True, confidence=0.99),

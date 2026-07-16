@@ -6,7 +6,7 @@ from .llm import LLM
 from .models import Node, LeafNode, UnmappableNode, Fact
 from .evaluator import pivotal_leaf_ids
 from .extractor import EXTRACTOR_SYSTEM
-from .reference import parse_measurement
+from .reference import parse_measurement, compare_ordinal
 
 
 def _values_agree(a, b) -> bool:
@@ -26,6 +26,17 @@ def _values_agree(a, b) -> bool:
     if na is not None and nb is not None:
         return na == nb
     return str(a).strip().lower() == str(b).strip().lower()
+
+
+def _values_agree_for(predicate: str, a, b) -> bool:
+    if a is None and b is None:
+        return True
+    if predicate == "ordinal_gte":
+        try:
+            return compare_ordinal(str(a), str(b)) == 0
+        except (ValueError, TypeError):
+            return str(a).strip().lower() == str(b).strip().lower()
+    return _values_agree(a, b)
 
 
 def _leaf_by_id(root: Node) -> dict[str, LeafNode]:
@@ -82,7 +93,7 @@ def verify_facts(chart_text: str, root: Node, facts: dict[str, Fact],
             continue
         orig_found = bool(orig and orig.found)
         orig_val = orig.value if orig else None
-        if vf.found != orig_found or not _values_agree(vf.value, orig_val):
+        if vf.found != orig_found or not _values_agree_for(f["predicate"], vf.value, orig_val):
             flags[field] = "verifier_disagreement"
             # keep original value but drop confidence to force human review
             if orig:
