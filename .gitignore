@@ -4,3 +4,8 @@ __pycache__/
 node_modules/
 dist/
 .env
+.DS_Store
+.claude/settings.local.json
+# stray working copies of sample PDFs at repo root (canonical copy: backend/tests/samples/)
+/mcg.pdf
+/robert_mitchell_chart_final.pdf
