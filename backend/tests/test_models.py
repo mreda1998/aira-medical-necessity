@@ -1,6 +1,6 @@
 from app.models import (
     Status, PredicateType, LeafNode, AllOf, NOf, CriteriaTree,
-    CriteriaBranch, Fact, Order,
+    CriteriaBranch, Fact, Order, SourceSpan, AnyOf, UnmappableNode, EvalResult,
 )
 
 
@@ -42,3 +42,24 @@ def test_status_and_order():
     assert Status.INSUFFICIENT.value == "INSUFFICIENT_EVIDENCE"
     o = Order(modality="radiofrequency", vein="great_saphenous", laterality="right", cpt="36475")
     assert o.vein == "great_saphenous"
+
+
+def test_untested_types_roundtrip():
+    span = SourceSpan(text="quote from guideline")
+    assert SourceSpan.model_validate(span.model_dump()).text == "quote from guideline"
+
+    any_of = AnyOf(id="r", children=[
+        LeafNode(id="a", predicate=PredicateType.BOOLEAN, field="a", threshold=True, human_readable="a"),
+    ])
+    assert any_of.kind == "any_of"
+    assert AnyOf.model_validate(any_of.model_dump()).children[0].id == "a"
+
+    um = UnmappableNode(id="u", human_readable="could not map", reason="novel modality")
+    assert UnmappableNode.model_validate(um.model_dump()).reason == "novel modality"
+
+    res = EvalResult(node_id="root", kind="all_of", status=Status.INSUFFICIENT, children=[
+        EvalResult(node_id="leaf1", kind="leaf", status=Status.MET, human_readable="child"),
+    ])
+    round_tripped = EvalResult.model_validate(res.model_dump())
+    assert round_tripped.children[0].status == Status.MET
+    assert round_tripped.children[0].human_readable == "child"
