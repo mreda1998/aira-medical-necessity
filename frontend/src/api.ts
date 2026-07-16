@@ -7,11 +7,11 @@ export interface EvalNode {
 }
 export interface BranchResult {
   branch_id: string; procedure_label: string; verdict: Status;
-  tree: EvalNode; gap_flags: Record<string, string>;
+  tree: EvalNode; decisive_findings: EvalNode[]; gap_flags: Record<string, string>;
 }
 export interface RunResult {
   guideline_id: string; title: string;
-  order: { modality?: string; vein?: string; laterality?: string; cpt?: string };
+  order: { modality?: string; vein?: string; laterality?: string; cpt?: string; patient_age?: number };
   route_flag?: string | null; evaluated_branches: BranchResult[];
   /** ordered per-step intermediate artifacts; present only in debug mode */
   debug?: { step: string; data: unknown }[] | null;

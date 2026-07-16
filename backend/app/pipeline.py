@@ -2,7 +2,7 @@ import logging
 import time
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .llm import LLM
 from .models import Status, Order, EvalResult
@@ -11,7 +11,7 @@ from .compiler import compile_cached
 from .router import extract_order, select_branch
 from .extractor import extract_facts
 from .verifier import leaves_to_verify, verify_facts
-from .evaluator import evaluate
+from .evaluator import evaluate, decisive_findings
 from .trace import Tracer
 
 log = logging.getLogger("aira.pipeline")
@@ -22,7 +22,8 @@ class BranchResult(BaseModel):
     procedure_label: str
     verdict: Status
     tree: EvalResult
-    gap_flags: dict[str, str] = {}
+    decisive_findings: list[EvalResult]
+    gap_flags: dict[str, str] = Field(default_factory=dict)
 
 
 class RunResult(BaseModel):
@@ -111,6 +112,10 @@ def run(
                 {
                     "verdict": eval_tree.status.value,
                     "gap_flags": gap_flags,
+                    "decisive_findings": [
+                        finding.model_dump(mode="json")
+                        for finding in decisive_findings(branch.root, eval_tree)
+                    ],
                     "eval_tree": eval_tree.model_dump(mode="json"),
                 },
             )
@@ -121,6 +126,7 @@ def run(
                 procedure_label=branch.procedure_label,
                 verdict=eval_tree.status,
                 tree=eval_tree,
+                decisive_findings=decisive_findings(branch.root, eval_tree),
                 gap_flags=gap_flags,
             )
         )

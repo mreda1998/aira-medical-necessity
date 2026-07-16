@@ -1,7 +1,7 @@
 from app.models import (
-    Status, PredicateType, LeafNode, AllOf, AnyOf, NOf, Fact,
+    Status, PredicateType, LeafNode, AllOf, AnyOf, NOf, Fact, EvidenceState,
 )
-from app.evaluator import evaluate, pivotal_leaf_ids
+from app.evaluator import evaluate, pivotal_leaf_ids, decisive_findings
 
 
 def leaf(id, pred, field, threshold=None, negated=False):
@@ -27,6 +27,29 @@ def test_leaf_met_not_met_insufficient():
 def test_numeric_leaf_with_boolean_value_is_insufficient():
     l = leaf("d", PredicateType.NUMERIC_GTE, "vein_diameter_mm", 3)
     assert evaluate(l, facts(fact("vein_diameter_mm", True))).status == Status.INSUFFICIENT
+
+
+def test_strict_numeric_predicates_do_not_weaken_boundaries():
+    gt = leaf("gt", PredicateType.NUMERIC_GT, "ahi", 15)
+    lt = leaf("lt", PredicateType.NUMERIC_LT, "age", 18)
+    assert evaluate(gt, facts(fact("ahi", 15))).status == Status.NOT_MET
+    assert evaluate(gt, facts(fact("ahi", 15.1))).status == Status.MET
+    assert evaluate(lt, facts(fact("age", 18))).status == Status.NOT_MET
+    assert evaluate(lt, facts(fact("age", 17))).status == Status.MET
+
+
+def test_missing_and_conflicting_are_not_clinical_negatives():
+    criterion = leaf("e", PredicateType.EXISTENCE, "retropalatal_narrowing")
+    missing = Fact(
+        field="retropalatal_narrowing",
+        state=EvidenceState.NOT_DOCUMENTED,
+        source_span={"text": "No fiberoptic endoscopy report is included"},
+    )
+    conflicting = Fact(field="retropalatal_narrowing", state=EvidenceState.CONFLICTING)
+    absent = Fact(field="retropalatal_narrowing", state=EvidenceState.EXPLICITLY_ABSENT)
+    assert evaluate(criterion, {criterion.field: missing}).status == Status.INSUFFICIENT
+    assert evaluate(criterion, {criterion.field: conflicting}).status == Status.INSUFFICIENT
+    assert evaluate(criterion, {criterion.field: absent}).status == Status.NOT_MET
 
 
 def test_ordinal_leaf():
@@ -60,6 +83,38 @@ def test_any_of_precedence():
     assert evaluate(node, facts(fact("a", True))).status == Status.MET
     assert evaluate(node, facts(fact("a", False), fact("b", False))).status == Status.NOT_MET
     assert evaluate(node, {}).status == Status.INSUFFICIENT
+
+
+def test_decisive_findings_prune_unused_passing_alternatives():
+    node = AnyOf(id="r", children=[
+        leaf("bmi35", PredicateType.NUMERIC_GTE, "bmi", 35),
+        AllOf(id="lower_bmi", children=[
+            leaf("bmi30", PredicateType.NUMERIC_GTE, "bmi", 30),
+            leaf("diabetes", PredicateType.EXISTENCE, "diabetes"),
+        ]),
+    ])
+    fs = facts(fact("bmi", 33.3), fact("diabetes", True))
+    result = evaluate(node, fs)
+    assert result.status == Status.MET
+    assert [finding.node_id for finding in decisive_findings(node, result)] == ["bmi30", "diabetes"]
+
+
+def test_decisive_findings_for_insufficient_all_of_show_only_missing_paths():
+    node = AllOf(id="r", children=[
+        leaf("ahi", PredicateType.NUMERIC_GTE, "ahi", 10),
+        leaf("cpap", PredicateType.EXISTENCE, "cpap_intolerance"),
+        leaf("scope", PredicateType.EXISTENCE, "retropalatal_narrowing"),
+    ])
+    fs = {
+        "ahi": Fact(field="ahi", value=12.8, found=True),
+        "cpap_intolerance": Fact(field="cpap_intolerance", state=EvidenceState.CONFLICTING),
+        "retropalatal_narrowing": Fact(
+            field="retropalatal_narrowing", state=EvidenceState.NOT_DOCUMENTED
+        ),
+    }
+    result = evaluate(node, fs)
+    assert result.status == Status.INSUFFICIENT
+    assert [finding.node_id for finding in decisive_findings(node, result)] == ["cpap", "scope"]
 
 
 def test_n_of_unreachable_is_not_met():

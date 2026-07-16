@@ -2,13 +2,17 @@ from typing import Optional
 
 from .models import (
     Status, PredicateType, Node, LeafNode, UnmappableNode, AllOf, AnyOf, NOf,
-    Fact, EvalResult,
+    Fact, EvalResult, EvidenceState,
 )
 from .reference import compare_ordinal, parse_measurement
 
 
 _FALSY_STRINGS = {"false", "no", "absent", "denied", "none", "negative", "0"}
 _TRUTHY_STRINGS = {"true", "yes", "1", "present"}
+_UNKNOWN_STRINGS = {
+    "unknown", "unclear", "not documented", "not assessed", "not available",
+    "unavailable", "pending", "conflicting",
+}
 
 
 def _is_explicit_negation(value) -> bool:
@@ -38,6 +42,8 @@ def _apply_predicate(leaf: LeafNode, f: Fact) -> Status:
     p = leaf.predicate
     v = f.value
     if p == PredicateType.EXISTENCE:
+        if isinstance(v, str) and v.strip().lower() in _UNKNOWN_STRINGS:
+            return Status.INSUFFICIENT
         # found=True with an explicitly falsy value means the chart addresses
         # the finding and denies it — that is NOT_MET, not MET.
         if _is_explicit_negation(v):
@@ -54,11 +60,21 @@ def _apply_predicate(leaf: LeafNode, f: Fact) -> Status:
         else:
             effective = bool(v)
         return Status.MET if effective == bool(want) else Status.NOT_MET
-    if p in (PredicateType.NUMERIC_GTE, PredicateType.NUMERIC_LTE, PredicateType.DURATION_GTE):
+    if p in (
+        PredicateType.NUMERIC_GT,
+        PredicateType.NUMERIC_GTE,
+        PredicateType.NUMERIC_LT,
+        PredicateType.NUMERIC_LTE,
+        PredicateType.DURATION_GTE,
+    ):
         num = parse_measurement(v)
         thr = parse_measurement(leaf.threshold)
         if num is None or thr is None:
             return Status.INSUFFICIENT
+        if p == PredicateType.NUMERIC_GT:
+            return Status.MET if num > thr else Status.NOT_MET
+        if p == PredicateType.NUMERIC_LT:
+            return Status.MET if num < thr else Status.NOT_MET
         if p == PredicateType.NUMERIC_LTE:
             return Status.MET if num <= thr else Status.NOT_MET
         return Status.MET if num >= thr else Status.NOT_MET  # gte / duration_gte
@@ -75,7 +91,16 @@ def _eval_leaf(leaf: LeafNode, facts: dict[str, Fact]) -> EvalResult:
     flags = []
     if leaf.parse_confidence < 0.6:
         flags.append("low_parse_confidence")
-    if f is None or not f.found or (f.value is None and leaf.predicate != PredicateType.EXISTENCE):
+    unavailable = f is not None and f.state in {
+        EvidenceState.NOT_DOCUMENTED,
+        EvidenceState.CONFLICTING,
+    }
+    if (
+        f is None
+        or unavailable
+        or not f.found
+        or (f.value is None and leaf.predicate != PredicateType.EXISTENCE)
+    ):
         status = Status.INSUFFICIENT
     else:
         status = _apply_predicate(leaf, f)
@@ -141,6 +166,43 @@ def evaluate(node: Node, facts: dict[str, Fact],
     else:
         raise TypeError(f"unknown node type: {type(node)}")
     return EvalResult(node_id=node.id, kind=node.kind, status=status, children=child_results)
+
+
+def decisive_findings(node: Node, result: EvalResult) -> list[EvalResult]:
+    """Return only leaf findings that explain the root result.
+
+    Passing OR/N-of alternatives are pruned to a minimal witness. Failing AND
+    nodes show only the branches that actually fail. Insufficient nodes show
+    only unresolved paths. This keeps irrelevant alternatives out of the UI.
+    """
+    if isinstance(node, (LeafNode, UnmappableNode)):
+        return [result]
+
+    pairs = list(zip(node.children, result.children))
+    selected: list[tuple[Node, EvalResult]]
+    if result.status == Status.MET:
+        if isinstance(node, AllOf):
+            selected = pairs
+        elif isinstance(node, AnyOf):
+            selected = next(([pair] for pair in pairs if pair[1].status == Status.MET), [])
+        else:  # NOf
+            selected = [pair for pair in pairs if pair[1].status == Status.MET][:node.k]
+    elif result.status == Status.NOT_MET:
+        selected = [pair for pair in pairs if pair[1].status == Status.NOT_MET]
+    else:
+        selected = [pair for pair in pairs if pair[1].status == Status.INSUFFICIENT]
+
+    findings: list[EvalResult] = []
+    for child, child_result in selected:
+        findings.extend(decisive_findings(child, child_result))
+
+    deduped: list[EvalResult] = []
+    seen: set[str] = set()
+    for finding in findings:
+        if finding.node_id not in seen:
+            seen.add(finding.node_id)
+            deduped.append(finding)
+    return deduped
 
 
 def _collect_leaves(node: Node) -> list[LeafNode]:

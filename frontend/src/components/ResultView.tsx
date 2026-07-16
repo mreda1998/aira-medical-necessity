@@ -20,17 +20,19 @@ function ProcedurePill({ order }: { order: RunResult["order"] }) {
 
 function VerdictBanner({ branch }: { branch: BranchResult }) {
   const style = STATUS[branch.verdict];
-  const leaves = leavesOf(branch.tree);
+  const leaves = branch.decisive_findings.length > 0
+    ? branch.decisive_findings
+    : leavesOf(branch.tree);
   const met = leaves.filter((l) => l.status === "MET").length;
   const insufficient = leaves.filter((l) => l.status === "INSUFFICIENT_EVIDENCE").length;
   const notMet = leaves.filter((l) => l.status === "NOT_MET").length;
 
   const detail =
     branch.verdict === "MET"
-      ? `All ${leaves.length} criteria satisfied`
+      ? `Applicable rule satisfied · ${met} supporting item${met === 1 ? "" : "s"}`
       : branch.verdict === "NOT_MET"
-        ? `${notMet} criteri${notMet === 1 ? "on" : "a"} not met`
-        : `${insufficient} item${insufficient === 1 ? "" : "s"} to resolve · ${met} of ${leaves.length} met`;
+        ? `${notMet} decisive criteri${notMet === 1 ? "on" : "a"} not met`
+        : `${insufficient} decisive item${insufficient === 1 ? "" : "s"} to resolve`;
 
   return (
     <div
@@ -46,7 +48,9 @@ function VerdictBanner({ branch }: { branch: BranchResult }) {
 }
 
 function BranchCard({ branch }: { branch: BranchResult }) {
-  const leaves = leavesOf(branch.tree);
+  const leaves = branch.decisive_findings.length > 0
+    ? branch.decisive_findings
+    : leavesOf(branch.tree);
   return (
     <section className="animate-rise rounded-card border border-line bg-white p-6 shadow-[0_1px_2px_rgba(12,15,17,0.04),0_12px_32px_-16px_rgba(12,15,17,0.12)] sm:p-7">
       <p className="text-[13px] font-semibold uppercase tracking-[0.14em] text-ink-faint">

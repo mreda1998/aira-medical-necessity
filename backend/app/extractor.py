@@ -7,16 +7,51 @@ from .models import Node, LeafNode, UnmappableNode, Fact
 
 EXTRACTOR_SYSTEM = """You extract clinical facts from a patient chart, but ONLY the fields requested.
 For each requested field return: {"field": str, "value": <number|string|bool|null>,
-"unit": str|null, "found": bool, "source_span": {"text": <verbatim quote from chart>},
-"confidence": float}. If the chart does not document a field, return found=false and value=null.
-If the chart explicitly denies or negates a finding (e.g. "no ulceration", "denies bleeding"),
-return found=true with value=false — reserve found=false for findings the chart does not
-address at all.
+"unit": str|null, "state": S, "source_span": {"text": <verbatim quote from chart>},
+"confidence": float}, where S is exactly one of DOCUMENTED, EXPLICITLY_ABSENT, NOT_DOCUMENTED,
+or CONFLICTING.
+
+Evidence-state rules:
+- DOCUMENTED: the clinical value/finding was actually assessed and is present in the chart.
+- EXPLICITLY_ABSENT: the clinical finding was assessed and explicitly denied (e.g. "no ulceration").
+  Use value=false.
+- NOT_DOCUMENTED: the chart says a report/result is absent, pending, unknown, unavailable, or simply
+  does not address the fact. Use value=null. A sentence saying documentation is missing is NOT a
+  negative clinical finding.
+- CONFLICTING: chart statements disagree and the requested fact cannot be resolved. Use value=null.
+
+Examples: "No fiberoptic endoscopy report is included" -> NOT_DOCUMENTED, not EXPLICITLY_ABSENT.
+"It is unknown whether retropalatal narrowing is present" -> NOT_DOCUMENTED.
+"No retropalatal narrowing was seen on endoscopy" -> EXPLICITLY_ABSENT.
+"One note says PAP stopped; another says it continued" -> CONFLICTING when duration/tolerance cannot
+be resolved.
+
 Do NOT infer facts that are not supported by the chart text.
 For numeric, duration, or classification fields (the requested field list shows each field's
-predicate and unit), "value" must be the actual quantity or class from the chart ("5 mm",
+expected_type and unit), "value" must be the actual quantity or class from the chart ("5 mm",
 6.5, "C4a", "4 months") — never true/false. Reserve booleans for boolean/existence fields.
 Return JSON: {"facts": [ ... ]}."""
+
+
+def field_spec(leaf: LeafNode) -> dict:
+    """Describe a raw chart field without exposing the policy comparison.
+
+    Thresholds and operators belong to the evaluator. Including them in the
+    extraction request encourages a model to return whether a criterion passes
+    instead of returning the observed value (for example ``false`` vs BMI 33.3).
+    """
+    if leaf.predicate.value.startswith("numeric_") or leaf.predicate.value == "duration_gte":
+        expected_type = "number"
+    elif leaf.predicate.value == "ordinal_gte":
+        expected_type = "string"
+    else:
+        expected_type = "boolean"
+    return {
+        "field": leaf.field,
+        "expected_type": expected_type,
+        "unit": leaf.unit,
+        "clinical_concept": leaf.field.replace("_", " "),
+    }
 
 
 def required_fields(root: Node) -> list[dict]:
@@ -24,9 +59,7 @@ def required_fields(root: Node) -> list[dict]:
 
     def walk(n: Node):
         if isinstance(n, LeafNode):
-            out.append({"field": n.field, "predicate": n.predicate.value,
-                        "human_readable": n.human_readable,
-                        "threshold": n.threshold, "unit": n.unit})
+            out.append(field_spec(n))
         elif isinstance(n, UnmappableNode):
             return
         else:

@@ -1,5 +1,5 @@
 from app.llm import FakeLLM
-from app.models import AllOf, LeafNode, PredicateType, Fact
+from app.models import AllOf, LeafNode, PredicateType, Fact, EvidenceState
 from app.evaluator import pivotal_leaf_ids
 from app.verifier import leaves_to_verify, verify_facts
 
@@ -27,6 +27,18 @@ def test_verify_flags_disagreement():
         {"field": "fb", "value": True, "found": True, "source_span": {"text": "reflux noted"},
          "confidence": 0.8}]}])
     updated, flags = verify_facts("chart", ROOT, facts, ["b"], verifier)
+    assert flags["fb"] == "verifier_disagreement"
+
+
+def test_verify_flags_evidence_state_disagreement():
+    facts = {
+        "fa": Fact(field="fa", value=True, found=True, confidence=0.99),
+        "fb": Fact(field="fb", state=EvidenceState.CONFLICTING, confidence=0.2),
+    }
+    verifier = FakeLLM([{"facts": [{
+        "field": "fb", "value": None, "state": "NOT_DOCUMENTED", "confidence": 0.8,
+    }]}])
+    _updated, flags = verify_facts("chart", ROOT, facts, ["b"], verifier)
     assert flags["fb"] == "verifier_disagreement"
 
 

@@ -1,0 +1,153 @@
+{
+  "case_01_bariatric_meets.pdf": {
+    "policy": "Cigna Medical Coverage Policy 0051 - Bariatric Surgery and Procedures",
+    "expected_status": "MEETS_MEDICAL_NECESSITY",
+    "logic": {
+      "all": [
+        {
+          "either": [
+            {
+              "criterion": "BMI >=35",
+              "result": false
+            },
+            {
+              "all": [
+                {
+                  "criterion": "BMI 30-34.9",
+                  "result": true,
+                  "evidence": "BMI 33.3"
+                },
+                {
+                  "criterion": "at least one significant obesity-related comorbidity",
+                  "result": true,
+                  "evidence": "Type 2 diabetes"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "all": [
+            {
+              "criterion": "procedure description",
+              "result": true
+            },
+            {
+              "criterion": "failed medical weight management",
+              "result": true
+            },
+            {
+              "criterion": "unequivocal mental health clearance",
+              "result": true
+            },
+            {
+              "criterion": "nutrition evaluation",
+              "result": true
+            }
+          ]
+        },
+        {
+          "any_covered_procedure": [
+            {
+              "criterion": "laparoscopic sleeve gastrectomy CPT 43775",
+              "result": true
+            }
+          ]
+        }
+      ]
+    },
+    "summary": "Meets the lower-BMI EITHER branch through BMI 30-34.9 plus diabetes, and every required multidisciplinary AND element is present."
+  },
+  "case_02_pvc_ablation_does_not_meet.pdf": {
+    "policy": "Cigna Medical Coverage Policy 0529 - Cardiac Ablation of Abnormal Electrical Rhythms",
+    "expected_status": "DOES_NOT_MEET_MEDICAL_NECESSITY",
+    "logic": {
+      "any": [
+        {
+          "all": [
+            {
+              "criterion": "PVC burden >15%",
+              "result": false,
+              "evidence": "12.4%"
+            }
+          ]
+        },
+        {
+          "all": [
+            {
+              "criterion": "PVCs symptomatic",
+              "result": false,
+              "evidence": "explicitly asymptomatic"
+            },
+            {
+              "either": [
+                {
+                  "criterion": "medical therapy ineffective",
+                  "result": false
+                },
+                {
+                  "criterion": "contraindicated",
+                  "result": false
+                },
+                {
+                  "criterion": "not tolerated",
+                  "result": false
+                },
+                {
+                  "criterion": "not preferred by patient",
+                  "result": false
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "summary": "Both alternative PVC pathways fail on explicit facts; this is not a missing-documentation case."
+  },
+  "case_03_UPPP_insufficient_documentation.pdf": {
+    "policy": "Anthem SURG.00129 - Oral, Pharyngeal and Maxillofacial Surgical Treatment for OSA or Snoring",
+    "expected_status": "INSUFFICIENT_DOCUMENTATION",
+    "logic": {
+      "all": [
+        {
+          "A_any": [
+            {
+              "criterion": "UPPP alone AHI 10-15 plus qualifying condition",
+              "result": true,
+              "evidence": "AHI 12.8 plus hypertension and Epworth 13"
+            }
+          ]
+        },
+        {
+          "B_either": [
+            {
+              "criterion": "AHI >15 despite compliant PAP",
+              "result": false,
+              "evidence": "residual AHI 3.2"
+            },
+            {
+              "criterion": "unable to tolerate CPAP despite >=1 month adjustments",
+              "result": "UNKNOWN"
+            }
+          ]
+        },
+        {
+          "criterion": "fiberoptic endoscopy shows retropalatal narrowing primary source",
+          "result": "UNKNOWN",
+          "evidence": "report absent"
+        },
+        {
+          "criterion": "age >=18 or skeletal growth complete",
+          "result": true,
+          "evidence": "age 54"
+        }
+      ]
+    },
+    "missing_documentation": [
+      "Fiberoptic endoscopy result",
+      "Clear one-month CPAP adjustment/intolerance chronology"
+    ],
+    "summary": "The AHI/comorbidity branch and age are satisfied, but two mandatory AND elements cannot be established."
+  }
+}

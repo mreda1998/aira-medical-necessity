@@ -14,6 +14,10 @@ ROOT = AllOf(id="r", children=[
 def test_required_fields_lists_every_leaf():
     fields = {f["field"] for f in required_fields(ROOT)}
     assert fields == {"vein_diameter_mm", "saphenous_reflux_demonstrated"}
+    numeric = next(f for f in required_fields(ROOT) if f["field"] == "vein_diameter_mm")
+    assert numeric["expected_type"] == "number"
+    assert "threshold" not in numeric
+    assert "predicate" not in numeric
 
 
 def test_extract_facts_maps_and_defaults_missing():

@@ -44,6 +44,9 @@ def test_run_end_to_end_with_fakes(tmp_path, monkeypatch):
         verifier = FakeLLM([])
         result = app.pipeline.run(b"g", b"c", primary, verifier)
         assert result.evaluated_branches[0].verdict == Status.MET
+        assert [f.node_id for f in result.evaluated_branches[0].decisive_findings] == [
+            "reflux", "size"
+        ]
         # no tracer passed -> no debug payload
         assert result.debug is None
 
