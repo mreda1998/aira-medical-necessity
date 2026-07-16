@@ -44,6 +44,11 @@ async def evaluate_endpoint(
         ) from exc
     except PdfReadError as exc:
         raise HTTPException(status_code=400, detail="could not read PDF input") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"pipeline failure: {type(exc).__name__}",
+        ) from exc
 
 
 _dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"

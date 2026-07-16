@@ -75,7 +75,7 @@ def verify_facts(chart_text: str, root: Node, facts: dict[str, Fact],
             f"{json.dumps(fields, indent=2)}\nReturn JSON {{\"facts\": [...]}}.")
     raw = verifier.complete_json(EXTRACTOR_SYSTEM, user)
     v_by_field: dict[str, Fact] = {}
-    for item in raw.get("facts", []):
+    for item in (raw.get("facts") or []):
         if not isinstance(item, dict) or "field" not in item:
             continue  # malformed entry — no verification signal for this field
         try:

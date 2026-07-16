@@ -76,3 +76,25 @@ def test_evaluate_llm_malformed_json_returns_502(monkeypatch, tmp_path):
                               "chart": ("c2.pdf", b"unique-chart-bytes", "application/pdf")})
     assert resp.status_code == 502
     assert "malformed JSON" in resp.json()["detail"]
+
+
+def test_evaluate_unexpected_exception_returns_502_pipeline_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("CACHE_DIR", str(tmp_path))
+    import importlib
+    from app import store as app_store, compiler as app_compiler, pipeline as app_pipeline
+    importlib.reload(app_store); importlib.reload(app_compiler); importlib.reload(app_pipeline)
+    monkeypatch.setattr(app_pipeline, "extract_text", lambda b: "text")
+    monkeypatch.setattr(app_compiler, "extract_text", lambda b: "text")
+
+    class ExplodingLLM:
+        def complete_json(self, system, user, *, model=None):
+            raise TypeError("unexpected LLM client shape")
+
+    app.dependency_overrides[get_clients] = lambda: (ExplodingLLM(), ExplodingLLM())
+    client = TestClient(app)
+    resp = client.post("/api/evaluate",
+                       files={"guideline": ("g3.pdf", b"unique-guideline-bytes-3", "application/pdf"),
+                              "chart": ("c3.pdf", b"unique-chart-bytes-3", "application/pdf")})
+    assert resp.status_code == 502
+    assert "pipeline failure" in resp.json()["detail"]
+    assert "TypeError" in resp.json()["detail"]

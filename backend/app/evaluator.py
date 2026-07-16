@@ -8,6 +8,7 @@ from .reference import compare_ordinal, parse_measurement
 
 
 _FALSY_STRINGS = {"false", "no", "absent", "denied", "none", "negative"}
+_TRUTHY_STRINGS = {"true", "yes", "1", "present"}
 
 
 def _is_explicit_negation(value) -> bool:
@@ -17,6 +18,18 @@ def _is_explicit_negation(value) -> bool:
     if value is False:
         return True
     if isinstance(value, str) and value.strip().lower() in _FALSY_STRINGS:
+        return True
+    return False
+
+
+def _is_explicit_affirmation(value) -> bool:
+    """True when an extracted value explicitly affirms the finding — the
+    BOOLEAN-predicate counterpart to _is_explicit_negation. Covers real
+    booleans and the string-y truthy values LLM extractors sometimes emit
+    (e.g. "yes", "true", "present")."""
+    if value is True:
+        return True
+    if isinstance(value, str) and value.strip().lower() in _TRUTHY_STRINGS:
         return True
     return False
 
@@ -32,7 +45,13 @@ def _apply_predicate(leaf: LeafNode, f: Fact) -> Status:
         return Status.MET  # documented present (value True or unvalued mention)
     if p == PredicateType.BOOLEAN:
         want = leaf.threshold if leaf.threshold is not None else True
-        return Status.MET if bool(v) == bool(want) else Status.NOT_MET
+        if _is_explicit_negation(v):
+            effective = False
+        elif _is_explicit_affirmation(v):
+            effective = True
+        else:
+            effective = bool(v)
+        return Status.MET if effective == bool(want) else Status.NOT_MET
     if p in (PredicateType.NUMERIC_GTE, PredicateType.NUMERIC_LTE, PredicateType.DURATION_GTE):
         num = parse_measurement(v)
         thr = parse_measurement(leaf.threshold)
@@ -67,6 +86,8 @@ def _eval_leaf(leaf: LeafNode, facts: dict[str, Fact]) -> EvalResult:
 
 
 def _combine_all(sts: list[Status]) -> Status:
+    if not sts:
+        return Status.INSUFFICIENT
     if Status.NOT_MET in sts:
         return Status.NOT_MET
     if Status.INSUFFICIENT in sts:
@@ -83,6 +104,8 @@ def _combine_any(sts: list[Status]) -> Status:
 
 
 def _combine_n(sts: list[Status], k: int) -> Status:
+    if not sts or k <= 0:
+        return Status.INSUFFICIENT
     met = sts.count(Status.MET)
     ins = sts.count(Status.INSUFFICIENT)
     if met >= k:

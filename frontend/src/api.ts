@@ -20,6 +20,10 @@ export async function evaluate(guideline: File, chart: File): Promise<RunResult>
   fd.append("guideline", guideline);
   fd.append("chart", chart);
   const resp = await fetch("/api/evaluate", { method: "POST", body: fd });
-  if (!resp.ok) throw new Error(`evaluate failed: ${resp.status}`);
+  if (!resp.ok) {
+    let detail = "";
+    try { detail = (await resp.json()).detail ?? ""; } catch { /* non-JSON body */ }
+    throw new Error(`evaluate failed (${resp.status})${detail ? `: ${detail}` : ""}`);
+  }
   return resp.json();
 }

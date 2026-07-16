@@ -41,6 +41,16 @@ def test_leaves_to_verify_includes_conf_0_7_band():
     assert "b" in leaves_to_verify(ROOT, facts)  # verifier's wider 0.75 net includes it
 
 
+def test_verify_survives_null_facts_list():
+    facts = {
+        "fa": Fact(field="fa", value=True, found=True, confidence=0.99),
+        "fb": Fact(field="fb", value=None, found=False, confidence=0.2),
+    }
+    verifier = FakeLLM([{"facts": None}])
+    updated, flags = verify_facts("chart", ROOT, facts, ["b"], verifier)
+    assert flags == {}  # no verification signal, no crash
+
+
 def test_verify_survives_malformed_verifier_output():
     facts = {
         "fa": Fact(field="fa", value=True, found=True, confidence=0.99),

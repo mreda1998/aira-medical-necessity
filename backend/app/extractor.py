@@ -45,7 +45,7 @@ def extract_facts(chart_text: str, root: Node, llm: LLM) -> dict[str, Fact]:
             "Return JSON {\"facts\": [...]}.")
     raw = llm.complete_json(EXTRACTOR_SYSTEM, user)
     by_field: dict[str, Fact] = {}
-    for item in raw.get("facts", []):
+    for item in (raw.get("facts") or []):
         if not isinstance(item, dict) or "field" not in item:
             continue  # malformed entry — the field will default to found=False
         try:

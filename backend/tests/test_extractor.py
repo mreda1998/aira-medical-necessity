@@ -28,6 +28,13 @@ def test_extract_facts_maps_and_defaults_missing():
     assert "vein_diameter_mm" in fake.calls[0]["user"]  # guided by the field list
 
 
+def test_extract_facts_survives_null_facts_list():
+    fake = FakeLLM([{"facts": None}])
+    facts = extract_facts("chart text", ROOT, fake)
+    assert facts["vein_diameter_mm"].found is False
+    assert facts["saphenous_reflux_demonstrated"].found is False
+
+
 def test_extract_facts_survives_malformed_entries():
     fake = FakeLLM([{"facts": [
         {"field": "vein_diameter_mm", "value": [1, 2, 3], "found": True},   # bad value type -> ValidationError

@@ -132,6 +132,20 @@ def test_existence_explicit_negation_is_not_met():
     assert evaluate(l, {}).status == Status.INSUFFICIENT
 
 
+def test_empty_conjunction_nodes_are_insufficient_not_met():
+    assert evaluate(AllOf(id="r", children=[]), {}).status == Status.INSUFFICIENT
+    assert evaluate(NOf(id="r", k=0, children=[]), {}).status == Status.INSUFFICIENT
+    assert evaluate(NOf(id="r", k=2, children=[]), {}).status == Status.INSUFFICIENT
+
+
+def test_boolean_predicate_coerces_string_negation():
+    l = leaf("b", PredicateType.BOOLEAN, "b", True)
+    assert evaluate(l, facts(fact("b", "no"))).status == Status.NOT_MET
+    assert evaluate(l, facts(fact("b", "false"))).status == Status.NOT_MET
+    assert evaluate(l, facts(fact("b", "yes"))).status == Status.MET
+    assert evaluate(l, facts(fact("b", True))).status == Status.MET
+
+
 def test_pivotal_leaf_ids_custom_threshold_widens_low_conf_band():
     # b found at confidence 0.7: default (0.6) threshold treats it as solid
     # evidence and excludes it; a wider 0.75 threshold (as used by the
