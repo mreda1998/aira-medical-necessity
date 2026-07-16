@@ -1,5 +1,7 @@
 import json
 
+from pydantic import ValidationError
+
 from .llm import LLM
 from .models import Node, LeafNode, UnmappableNode, Fact
 
@@ -39,7 +41,14 @@ def extract_facts(chart_text: str, root: Node, llm: LLM) -> dict[str, Fact]:
     user = (f"CHART:\n{chart_text}\n\nExtract these fields:\n{json.dumps(fields, indent=2)}\n"
             "Return JSON {\"facts\": [...]}.")
     raw = llm.complete_json(EXTRACTOR_SYSTEM, user)
-    by_field = {f["field"]: Fact.model_validate(f) for f in raw.get("facts", [])}
+    by_field: dict[str, Fact] = {}
+    for item in raw.get("facts", []):
+        if not isinstance(item, dict) or "field" not in item:
+            continue  # malformed entry — the field will default to found=False
+        try:
+            by_field[item["field"]] = Fact.model_validate(item)
+        except ValidationError:
+            continue  # malformed fact — degrade to found=False for this field
     result: dict[str, Fact] = {}
     for f in fields:
         result[f["field"]] = by_field.get(f["field"], Fact(field=f["field"], found=False))
