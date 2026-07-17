@@ -19,11 +19,20 @@ function ProcedurePill({ order }: { order: RunResult["order"] }) {
   );
 }
 
+function displayedFindings(branch: BranchResult) {
+  const allLeaves = leavesOf(branch.tree);
+  if (branch.decisive_findings.length === 0) return allLeaves;
+  if (branch.verdict === "MET") return branch.decisive_findings;
+
+  const decisiveIds = new Set(branch.decisive_findings.map((leaf) => leaf.node_id));
+  return allLeaves.filter(
+    (leaf) => leaf.status === "MET" || decisiveIds.has(leaf.node_id),
+  );
+}
+
 function VerdictBanner({ branch }: { branch: BranchResult }) {
   const style = STATUS[branch.verdict];
-  const leaves = branch.decisive_findings.length > 0
-    ? branch.decisive_findings
-    : leavesOf(branch.tree);
+  const leaves = displayedFindings(branch);
   const met = leaves.filter((l) => l.status === "MET").length;
   const insufficient = leaves.filter((l) => l.status === "INSUFFICIENT_EVIDENCE").length;
   const notMet = leaves.filter((l) => l.status === "NOT_MET").length;
@@ -57,9 +66,7 @@ function BranchCard({
   guidelineUrl?: string;
   chartUrl?: string;
 }) {
-  const leaves = branch.decisive_findings.length > 0
-    ? branch.decisive_findings
-    : leavesOf(branch.tree);
+  const leaves = displayedFindings(branch);
   return (
     <section className="animate-rise rounded-card border border-line bg-white p-6 shadow-[0_1px_2px_rgba(12,15,17,0.04),0_12px_32px_-16px_rgba(12,15,17,0.12)] sm:p-7">
       <p className="text-[13px] font-semibold uppercase tracking-[0.14em] text-ink-faint">

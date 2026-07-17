@@ -26,7 +26,7 @@ The pipeline is payer-agnostic: each uploaded guideline is compiled into the sam
 - OpenAI extracts the guideline tree, order, and chart facts as structured data.
 - Python validates the tree, routes the case, and computes the verdict deterministically.
 - Mistral re-checks only the evidence leaves that affected the verdict and cannot override it.
-- The UI shows decisive findings while retaining the full evaluated tree in the API response.
+- The UI shows decisive findings plus satisfied criteria for unresolved and failing cases, while retaining the full evaluated tree in the API response.
 
 See [DESIGN_NOTE.md](DESIGN_NOTE.md) for the concise architecture and failure-mode discussion, or [the full specification](docs/superpowers/specs/2026-07-15-medical-necessity-checker-design.md) for implementation detail.
 
