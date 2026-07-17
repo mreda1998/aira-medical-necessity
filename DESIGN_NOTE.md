@@ -52,14 +52,14 @@ No LLM interprets these operators at decision time. The same tree always produce
 
 ## Why the UI shows fewer items than the evaluator uses
 
-The full evaluated tree is returned as `branch.tree`. The UI highlights only `decisive_findings`:
+The full evaluated tree is returned as `branch.tree`. The UI highlights `decisive_findings` and, for failed or unresolved results, also shows satisfied criteria so users can see what has already been established:
 
 - a successful `AND` includes all required children;
 - a successful `OR` includes the witness branch that satisfied it;
 - a failed group includes the children that made success impossible;
 - an unresolved group includes the missing or conflicting evidence that blocks a decision.
 
-This keeps the screen readable without reducing the logic used for the verdict.
+Non-decisive failed or unresolved alternatives remain hidden. This keeps the screen readable without reducing the logic used for the verdict.
 
 ## Evidence provenance
 
